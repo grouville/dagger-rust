@@ -22,16 +22,26 @@ logged out):
 | app edit (`crates/core/flags/doc/version.rs`) | 317 | 1230 | 2449 (n=6) | 10017 (n=5) | |
 | library edit (`crates/printer/src/standard.rs`) | 483 | 1347 | 2669 (n=6) | | |
 
-Is that comparable? Only partly. The no-op rows compare like with like. On edits, `bazel
-build` compiles crates fully while the Dagger and native rows run `cargo check`, which stops
-at metadata, so the Bazel edit rows overstate its cost. Bazel has no check mode; rules_rust
-exposes an `rustc_rmeta_output` output group under pipelined compilation, but requesting only
-it did not trigger any rebuild on an edit here (0 actions), so no check-equivalent number was
-obtained. The fair direction is build vs build:
+Is that comparable? The no-op rows compare like with like. On edits, `bazel build`
+compiles crates fully while the Dagger and native rows run `cargo check`, which stops at
+metadata. Two ways to make it fair:
+
+Check vs check: rules_rust exposes the `.rmeta` artifact through the `build_metadata` output
+group (with `pipelined_compilation`), so `bazel build --output_groups=build_metadata
+//crates/...` is the check-equivalent (the `rg` binary has no metadata output and is excluded):
+
+| Flow (metadata only) | native `cargo check` | Dagger `check rust:check` | Bazel daemon `build_metadata` |
+|---|---:|---:|---:|
+| library edit | 483 | 1347 | 980 (n=6; 3 sandboxed actions, ~540 of it is the client/server round trip) |
+
+Build vs build:
 
 | Flow (full `cargo build` / `bazel build`) | native | Dagger (`call rust compile`) | Bazel daemon |
 |---|---:|---:|---:|
 | app edit | 644 (n=5) | 1803 (n=5, one 7.0s sample) | 2449 (n=6) |
+
+(The `rustc_rmeta_output` group is a diagnostics file group, empty unless
+`rustc_output_diagnostics` is on; requesting it builds nothing, which is expected.)
 
 - daemon: resident Bazel server, warm output base (Bazel's best case).
 - cold client: `bazel shutdown` before each sample, i.e. no resident process, which is
