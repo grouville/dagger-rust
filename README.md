@@ -1,52 +1,63 @@
 # Rust
 
-Cargo-compatible checks and build artifacts for an existing Cargo workspace,
-through ordinary Dagger commands.
+Cargo-compatible checks and build artifacts for a Cargo workspace, through
+ordinary Dagger commands.
 
 ## Usage
 
-In the Cargo workspace root, `dagger.toml`:
+In the workspace root, `dagger.toml`:
 
 ```toml
 [modules.rust]
-source = "github.com/grouville/dagger-rust"
+source = "https://github.com/grouville/dagger-rust"
 
 [modules.rust.settings]
 locked = true
-cacheKey = "my-project-rust"
+cacheKey = "my-project"
 ```
 
-Then:
+Write the source with an explicit `https://`: a scheme-less ref makes the engine probe
+HTTPS and SSH with `git ls-remote` on every command (~400ms) before it reads the lock.
 
 ```sh
 dagger check rust:check                 # cargo check
 dagger check rust:fmt rust:clippy rust:test
-dagger check                            # all of the above + generated-artifact drift
-dagger generate -y                      # cargo build, publish artifacts to target/dagger
+dagger check                            # all of the above, plus generated-artifact drift
+dagger generate -y                      # cargo build; publish artifacts under target/dagger
+dagger call rust artifacts export --path ./dist
 ```
 
-Checks take the project source as a contextual input, so an unchanged tree is a
-cache hit across commands. Cargo's source reconciliation and its intermediate
-build directory live in locked cache volumes; final artifacts are immutable
-Dagger results. The module owns `target/dagger` only. With `locked = false`,
-`dagger generate` also publishes Cargo's actual `Cargo.lock`.
+Every entrypoint takes the project as a contextual input, so an unchanged tree
+is a cache hit on any command. Each action (check, clippy, test, build) owns a
+source mirror and an intermediate build directory in locked cache volumes, so
+`dagger check` runs them concurrently; final artifacts are immutable results.
+The generator owns `target/dagger` only. With `locked = false` it also
+publishes the `Cargo.lock` Cargo produced.
 
 ## Settings
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `image` | pinned `rust` Debian bookworm image | toolchain image (only the pinned digest is supported today) |
-| `cacheKey` | `rust-v3` | prefix of the cache volumes; use one per project. Each action (check, clippy, test, build) owns its source mirror and intermediate build directory so `dagger check` runs them concurrently; expect one build directory per action on disk and one cold first run per action |
-| `locked` | `false` | pass `--locked` to Cargo and require an existing `Cargo.lock` |
-| `cargoProfile`, `target`, `features`, `allFeatures`, `noDefaultFeatures` | unset | forwarded to Cargo for check and build alike |
-| `pinnedSourceSync` | `true` | install rsync from checksum-pinned Debian packages instead of `apt-get` |
-| `prepareProjectToolchain` | `true` | honor a root `rust-toolchain(.toml)` in a cached toolchain layer |
+| `image` | pinned `rust` Debian bookworm amd64 image | toolchain image; any bookworm/amd64 Rust image works, the pinned packages below assume bookworm |
+| `cacheKey` | `rust` | prefix of the project's cache volumes; use one per project |
+| `locked` | `false` | pass `--locked` and require an up-to-date `Cargo.lock` |
 | `extraPackages` | `[]` | extra Debian packages for build scripts (`cmake`, `pkg-config`, `libssl-dev`, ...); gcc and make are always present |
+| `cargoProfile`, `target`, `features`, `allFeatures`, `noDefaultFeatures` | unset | forwarded to every Cargo invocation |
 
-## Limitations
+A root `rust-toolchain` / `rust-toolchain.toml` is honored: the selected
+toolchain and the components a check needs (clippy, rustfmt) are installed in
+a cached layer keyed by those files only.
 
-- Invoke from the workspace root; nested-directory invocation is not supported.
-- Linux/amd64 Debian image only; artifacts are Linux/GNU outputs.
-- Requires stable Cargo >= 1.91 (`build.build-dir`); it does not upgrade the toolchain.
-- `.git`, `target`, `dagger.toml` and `dagger.lock` are excluded from the Cargo source.
-- Symlink artifacts and workspaces with no final artifacts are rejected by the generator.
+## Notes
+
+- Invoke from the workspace root.
+- Linux/amd64 only; artifacts are Linux/GNU outputs.
+- Cargo >= 1.91 keeps intermediate state and final outputs apart
+  (`build.build-dir`); older toolchains use one target directory per action.
+  The module never changes the project's toolchain.
+- `.git`, `target`, `dagger.toml` and `dagger.lock` are excluded from the
+  source Cargo sees. `Cargo.lock`, `.cargo/config.toml`, build scripts and
+  sources are inputs.
+- The generator rejects symlink artifacts and workspaces with no final
+  artifacts.
+- Disk: one intermediate build directory per action per project.

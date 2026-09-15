@@ -1,4 +1,4 @@
-pub description = "Cargo-compatible checks and immutable build artifacts through ordinary Dagger commands (integration candidate)"
+pub description = "Cargo-compatible checks and build artifacts for a Cargo workspace"
 
 type CargoEnvelope {
   reason: String
@@ -24,75 +24,98 @@ type CargoFinished {
 }
 
 type Rust {
+  """Debian bookworm amd64 Rust image. The default is pinned by digest."""
   pub image: String! = "rust@sha256:39f68a3e8e3ff425f8945ffa91128e60ff930d53e17fbb5214e95824bdd46f1b"
-  pub cacheKey: String! = "rust-v3"
-  pub tracePhases: Boolean! = false
-  pub pinnedSourceSync: Boolean! = true
-  pub prepareProjectToolchain: Boolean! = true
+  """Prefix of this project's cache volumes. Use a distinct value per project."""
+  pub cacheKey: String! = "rust"
+  """Pass --locked to Cargo and require an up-to-date Cargo.lock."""
   pub locked: Boolean! = false
-  # Extra Debian packages for build scripts that need more than gcc and make
-  # (cmake, pkg-config, libssl-dev, ...). Installed with apt in the toolchain
-  # layer, so they cost cold time only once per package set.
+  """
+  Extra Debian packages for build scripts that need more than gcc and make
+  (cmake, pkg-config, libssl-dev, ...). Installed once per package set.
+  """
   pub extraPackages: [String!]! = []
 
-  # These flags apply equally to check and build. Cargo's project configuration
-  # remains authoritative when a value is omitted; no debug/linker overrides.
+  # Forwarded to every Cargo invocation. Unset values leave the project's own
+  # Cargo configuration authoritative.
   pub cargoProfile: String
   pub target: String
   pub features: [String!]! = []
   pub allFeatures: Boolean! = false
   pub noDefaultFeatures: Boolean! = false
 
-  let versionGuard: String! = """
+  # Runs once in the cached toolchain layer and records whether Cargo supports
+  # build.build-dir (>= 1.91). Newer toolchains keep the mutable intermediate
+  # state (/build) apart from the final outputs (/out); older ones use a single
+  # target directory per action and the build lane publishes its final
+  # artifacts into /out itself.
+  let cargoLayoutProbe: String! = """
     set -eu
     cargo_version=$(cargo --version)
-    if ! printf '%s\n' "$cargo_version" | awk '
+    printf '%s\n' "$cargo_version" >&2
+    if printf '%s\n' "$cargo_version" | awk '
       $1 == "cargo" && $2 !~ /-/ {
         split($2, v, ".")
         if (v[1] > 1 || (v[1] == 1 && v[2] >= 91)) ok = 1
       }
       END { exit !ok }
     '; then
-      printf 'This prototype requires stable Cargo >=1.91 for build.build-dir; selected: %s. No toolchain upgrade was performed.\n' "$cargo_version" >&2
-      exit 1
+      echo build_dir=1 > /etc/dagger-rust-cargo
+    else
+      echo build_dir=0 > /etc/dagger-rust-cargo
     fi
   """
 
+  # Selects the target layout recorded by cargoLayoutProbe; one file read.
+  let layoutSelect: String! = "if ! grep -qs build_dir=1 /etc/dagger-rust-cargo; then unset CARGO_BUILD_BUILD_DIR; export CARGO_TARGET_DIR=/build; fi"
+
+  # Without build.build-dir, Cargo writes final artifacts next to its
+  # intermediate state under /build. Copy the final ones (anything not under
+  # deps/, build/, incremental/ or .fingerprint/) into /out and point
+  # build.jsonl at them, so selectedArtifacts sees the same shape either way.
+  let publishLegacyArtifacts: String! = """
+    if ! grep -qs build_dir=1 /etc/dagger-rust-cargo; then
+      for f in $(grep -o '"/build/[^"]*"' /meta/build.jsonl | tr -d '"' | sort -u); do
+        rel=${f#/build/}
+        case "$rel" in */deps/*|*/build/*|*/incremental/*|*/.fingerprint/*) continue;; esac
+        [ -f "$f" ] || continue
+        mkdir -p "/out/$(dirname "$rel")"
+        cp -p "$f" "/out/$rel"
+        sed -i "s#\"$f\"#\"/out/$rel\"#g" /meta/build.jsonl
+      done
+    fi
+  """
+
+  # The image plus what Cargo build scripts commonly need beyond it: rsync for
+  # source reconciliation (see action), make for autotools-driven C builds,
+  # and whatever extraPackages names. Packages the module itself relies on are
+  # pinned by checksum so the layer is reproducible.
   let toolchain: Container! {
-    assert("This prototype supports only the recorded Linux/amd64 Debian bookworm Rust image") {
-      image == "rust@sha256:39f68a3e8e3ff425f8945ffa91128e60ff930d53e17fbb5214e95824bdd46f1b"
-    }
     let base = if (extraPackages.isEmpty) {
       container.from(image)
     } else {
       container.from(image)
         .withExec(["sh", "-c", "apt-get update -qq && apt-get install -y --no-install-recommends " + extraPackages.join(" ")])
     }
-    if (pinnedSourceSync) {
-      base
-        .withMountedFile("/tmp/rust-sync-libpopt.deb", http(
-          "https://deb.debian.org/debian/pool/main/p/popt/libpopt0_1.19%2Bdfsg-1_amd64.deb",
-          checksum: "sha256:6f94b488255acd996254f775c77ff3956557c61f860a3c9caeaf65457554194f",
-        ))
-        .withMountedFile("/tmp/rust-sync-rsync.deb", http(
-          "https://deb.debian.org/debian/pool/main/r/rsync/rsync_3.2.7-1%2Bdeb12u6_amd64.deb",
-          checksum: "sha256:ce99de6b36cbb62dc614a73463e467f2c1ef509545a9a2b33cab19b50530b672",
-        ))
-        # The image ships gcc but not make; crates with autotools build scripts
-        # (e.g. tikv-jemalloc-sys, used by fd and ruff) need it.
-        .withMountedFile("/tmp/rust-make.deb", http(
-          "https://deb.debian.org/debian/pool/main/m/make-dfsg/make_4.3-4.1_amd64.deb",
-          checksum: "sha256:a1a83af8cbd854af887b72ad196b1f4af58387815e21ced1000253a116a46e2a",
-        ))
-        .withExec(["sh", "-c", "test \"$(dpkg --print-architecture)\" = amd64 && dpkg -i /tmp/rust-sync-libpopt.deb /tmp/rust-sync-rsync.deb /tmp/rust-make.deb"])
-    } else {
-      base.withExec(["sh", "-c", "test \"$(dpkg --print-architecture)\" = amd64 && apt-get update -qq && apt-get install -y --no-install-recommends rsync make"])
-    }
+    base
+      .withMountedFile("/tmp/libpopt0.deb", http(
+        "https://deb.debian.org/debian/pool/main/p/popt/libpopt0_1.19%2Bdfsg-1_amd64.deb",
+        checksum: "sha256:6f94b488255acd996254f775c77ff3956557c61f860a3c9caeaf65457554194f",
+      ))
+      .withMountedFile("/tmp/rsync.deb", http(
+        "https://deb.debian.org/debian/pool/main/r/rsync/rsync_3.2.7-1%2Bdeb12u6_amd64.deb",
+        checksum: "sha256:ce99de6b36cbb62dc614a73463e467f2c1ef509545a9a2b33cab19b50530b672",
+      ))
+      .withMountedFile("/tmp/make.deb", http(
+        "https://deb.debian.org/debian/pool/main/m/make-dfsg/make_4.3-4.1_amd64.deb",
+        checksum: "sha256:a1a83af8cbd854af887b72ad196b1f4af58387815e21ced1000253a116a46e2a",
+      ))
+      .withExec(["sh", "-c", "test \"$(dpkg --print-architecture)\" = amd64 && dpkg -i /tmp/libpopt0.deb /tmp/rsync.deb /tmp/make.deb"])
   }
 
-  # The root toolchain files and requested component set key this immutable
-  # setup independently of application source. Build/check do not install
-  # Clippy or rustfmt unless the project itself requests those components.
+  # Keyed by the project's root toolchain files and the requested components
+  # only, so source edits never rebuild it. rustup honors rust-toolchain(.toml)
+  # while it is mounted, then the mount is dropped.
   let projectToolchain(source: Directory!, components: [String!]! = []): Container! {
     let config = source.filter(include: ["rust-toolchain", "rust-toolchain.toml"])
     let configured = toolchain
@@ -101,9 +124,6 @@ type Rust {
     let prepared = if (config.entries.isEmpty) {
       configured
     } else {
-      assert("Project toolchain preparation is required when a root toolchain file exists") {
-        prepareProjectToolchain
-      }
       configured.withExec(["rustup", "toolchain", "install", "--no-self-update"])
     }
     let equipped = if (components.isEmpty) {
@@ -113,7 +133,7 @@ type Rust {
       # selected toolchain, not the image's possibly different default.
       prepared.withExec(["rustup", "component", "add"] + components)
     }
-    equipped.withExec(["sh", "-c", versionGuard]).withoutMount("/src")
+    equipped.withExec(["sh", "-c", cargoLayoutProbe]).withoutMount("/src")
   }
 
   let cargoFlags: [String!]! {
@@ -127,28 +147,23 @@ type Rust {
     flags
   }
 
-  let source(ws: Workspace!): Directory! {
-    ws.directory("/", exclude: [".git", "target", "dagger.toml", "dagger.lock"])
-  }
-
   # Each action kind (check, clippy, test, build) owns its source mirror and
   # intermediate build directory. Sharing them would serialize the actions on
   # their locks even though Dagger runs the checks concurrently; Cargo's
   # registry and git caches use Cargo's own file locking and stay shared.
+  # The source is reconciled into the lane's mutable mirror with rsync by
+  # checksum rather than mounted directly: Cargo's freshness checks use mtimes,
+  # and a mirror keeps them stable for unchanged files across commands.
   let action(lane: String!, source: Directory!, command: [String!]!, components: [String!]! = []): Container! {
-    let script = if (tracePhases) {
-      "set -eu; start=$(date +%s%N); rsync -rclp --delete /input/ /src/; synced=$(date +%s%N); mkdir -p /out /meta; \"$@\"; finished=$(date +%s%N); printf 'RUST_BENCH_PHASE_NS sync=%s cargo=%s\\n' \"$((synced-start))\" \"$((finished-synced))\" >&2"
-    } else {
-      "set -eu; rsync -rclp --delete /input/ /src/; mkdir -p /out /meta; exec \"$@\""
-    }
+    let script = "set -eu; " + layoutSelect + "; rsync -rclp --delete /input/ /src/; mkdir -p /out /meta; exec \"$@\""
     projectToolchain(source, components)
       .withWorkdir("/src")
       .withMountedDirectory("/input", source)
       .withMountedCache("/src", cacheVolume(cacheKey + "-" + lane + "-source"), sharing: CacheSharingMode.LOCKED)
       .withMountedCache("/usr/local/cargo/registry", cacheVolume(cacheKey + "-registry"))
       .withMountedCache("/usr/local/cargo/git", cacheVolume(cacheKey + "-git"))
-      # Cargo owns this mutable intermediate cache. /out is ordinary container
-      # state: both fresh and dirty Cargo units publish final outputs there.
+      # /build is Cargo's mutable intermediate state; /out is container state,
+      # so final outputs are part of the immutable result.
       .withEnvVariable("CARGO_BUILD_BUILD_DIR", "/build")
       .withEnvVariable("CARGO_TARGET_DIR", "/out")
       .withMountedCache("/build", cacheVolume(cacheKey + "-" + lane + "-build"), sharing: CacheSharingMode.LOCKED)
@@ -161,9 +176,9 @@ type Rust {
 
   let buildResult(source: Directory!): Container! {
     let script = if (locked) {
-      "set -eu; cargo build --message-format=json-render-diagnostics \"$@\" > /meta/build.jsonl; cargo metadata --no-deps --format-version=1 --locked > /meta/workspace.json"
+      "set -eu; cargo build --message-format=json-render-diagnostics \"$@\" > /meta/build.jsonl; cargo metadata --no-deps --format-version=1 --locked > /meta/workspace.json\n" + publishLegacyArtifacts
     } else {
-      "set -eu; cargo build --message-format=json-render-diagnostics \"$@\" > /meta/build.jsonl; cargo metadata --no-deps --format-version=1 > /meta/workspace.json; cp -p Cargo.lock /meta/Cargo.lock"
+      "set -eu; cargo build --message-format=json-render-diagnostics \"$@\" > /meta/build.jsonl; cargo metadata --no-deps --format-version=1 > /meta/workspace.json; cp -p Cargo.lock /meta/Cargo.lock\n" + publishLegacyArtifacts
     }
     action("build", source, ["sh", "-c", script, "rust-build"] + cargoFlags)
   }
@@ -221,7 +236,7 @@ type Rust {
       if (kind == FileType.DIRECTORY) {
         selected.withDirectory(relative, out.directory(relative))
       } else {
-        assert("Expected a regular final artifact; symlink outputs are not supported by this prototype") {
+        assert("Expected a regular final artifact; symlink outputs are not supported") {
           kind == FileType.REGULAR
         }
         selected.withFile(relative, out.file(relative))
@@ -229,8 +244,10 @@ type Rust {
     }
   }
 
-  # Resolve the project's content before function cache lookup. Workspace is
-  # session-bound; a Directory lets identical sources reuse the whole result.
+  # Every entrypoint takes the project as a contextual Directory: identical
+  # trees are cache hits across commands, which a session-bound Workspace
+  # argument would not allow.
+  """Type-check the workspace (`cargo check`)."""
   pub check(
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
@@ -239,7 +256,7 @@ type Rust {
     null
   }
 
-  """Clippy with the project's own lint policy; warnings are not promoted implicitly."""
+  """Lint with Clippy under the project's own lint policy; warnings are not promoted."""
   pub clippy(
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
@@ -248,7 +265,7 @@ type Rust {
     null
   }
 
-  """Run the workspace tests using the same source and incremental cache boundary."""
+  """Run the workspace tests (`cargo test`)."""
   pub test(
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
@@ -257,7 +274,7 @@ type Rust {
     null
   }
 
-  """Check formatting without locking Cargo's mutable source or build caches."""
+  """Check formatting (`cargo fmt --check`)."""
   pub fmt(
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
@@ -270,19 +287,12 @@ type Rust {
     null
   }
 
-  """Evaluate the same build action as generate, without exporting host artifacts."""
-  pub compile(ws: Workspace!): Void {
-    buildResult(source(ws)).sync
-    null
-  }
-
-  pub checkLog(ws: Workspace!): String! {
-    checkResult(source(ws)).stderr
-  }
-
-  """Build workspace binaries/libraries and return only current final artifacts."""
-  pub artifacts(ws: Workspace!): Directory! {
-    selectedArtifacts(source(ws))
+  """Build the workspace and return only its final artifacts (binaries, libraries)."""
+  pub artifacts(
+    source: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+  ): Directory! {
+    selectedArtifacts(source)
   }
 
   """
@@ -337,19 +347,5 @@ type Rust {
       artifacts.withFile("Cargo.lock", buildResult(source).file("/meta/Cargo.lock"))
     }
     desired.changes(current)
-  }
-
-  """Cargo diagnostics from the same immutable build action (not an execution proof)."""
-  pub buildLog(ws: Workspace!): String! {
-    buildResult(source(ws)).stderr
-  }
-
-  """Cargo artifact/freshness messages from the same immutable build action."""
-  pub buildMessages(ws: Workspace!): File! {
-    buildResult(source(ws)).file("/meta/build.jsonl")
-  }
-
-  pub toolchainFiles(ws: Workspace!): Directory! {
-    projectToolchain(source(ws)).directory("/usr/local/rustup/toolchains")
   }
 }
