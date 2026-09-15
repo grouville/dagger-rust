@@ -160,7 +160,7 @@ type Rust {
   # they would natively.
   let action(lane: String!, source: Directory!, command: [String!]!, components: [String!]! = []): Container! {
     let script = "set -eu; " + layoutSelect + "; rsync -rclp --delete --filter=':- .gitignore' /input/ /src/; mkdir -p /out /meta; exec \"$@\""
-    projectToolchain(source, components)
+    let prepared = projectToolchain(source, components)
       .withWorkdir("/src")
       .withMountedDirectory("/input", source)
       .withMountedCache("/src", cacheVolume(cacheKey + "-" + lane + "-source"), sharing: CacheSharingMode.LOCKED)
@@ -171,7 +171,15 @@ type Rust {
       .withEnvVariable("CARGO_BUILD_BUILD_DIR", "/build")
       .withEnvVariable("CARGO_TARGET_DIR", "/out")
       .withMountedCache("/build", cacheVolume(cacheKey + "-" + lane + "-build"), sharing: CacheSharingMode.LOCKED)
-      .withExec(["sh", "-c", script, "rust-action"] + command)
+    # Artifacts the generator publishes must reproduce byte-for-byte for
+    # identical inputs; incremental rebuilds do not guarantee that. The check
+    # lanes keep incremental compilation, which is where edit latency comes from.
+    let configured = if (lane == "build") {
+      prepared.withEnvVariable("CARGO_INCREMENTAL", "0")
+    } else {
+      prepared
+    }
+    configured.withExec(["sh", "-c", script, "rust-action"] + command)
   }
 
   let checkResult(source: Directory!): Container! {
