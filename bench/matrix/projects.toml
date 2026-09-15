@@ -1,0 +1,18 @@
+# project = leaf-edit-file, core-edit-file, cargo extra flags
+[fd]
+leaf = "src/main.rs"
+core = "src/walk.rs"
+flags = "--no-default-features"
+# the pinned rust image has no `make`; fd's default use-jemalloc feature needs it on both sides
+[ripgrep]
+leaf = "crates/core/flags/doc/version.rs"
+core = "crates/printer/src/standard.rs"
+[axum]
+leaf = "axum-extra/src/lib.rs"
+core = "axum-core/src/lib.rs"
+[ruff]
+leaf = "crates/ruff/src/lib.rs"
+core = "crates/ruff_python_ast/src/lib.rs"
+[helix]
+leaf = "helix-term/src/main.rs"
+core = "helix-core/src/lib.rs"
