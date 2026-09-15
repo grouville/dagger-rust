@@ -1,0 +1,15 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+rust_binary(
+    name = "rg",
+    srcs = glob(["crates/core/**/*.rs"]),
+    crate_root = "crates/core/main.rs",
+    compile_data = glob(["crates/core/**"], exclude = ["**/*.rs"]),
+    edition = "2024",
+    aliases = aliases(),
+    deps = all_crate_deps(normal = True) + ["//crates/grep:grep", "//crates/ignore:ignore"],
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    rustc_env = {"RIPGREP_BUILD_GIT_HASH": "bazel"},
+    visibility = ["//visibility:public"],
+)

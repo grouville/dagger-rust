@@ -1,0 +1,3 @@
+build --@rules_rust//rust/settings:pipelined_compilation=true
+build --disk_cache=$BENCH_ROOT/bazel-disk-cache
+common --noenable_workspace
