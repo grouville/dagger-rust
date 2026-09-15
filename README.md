@@ -41,6 +41,7 @@ Dagger results. The module owns `target/dagger` only. With `locked = false`,
 | `cargoProfile`, `target`, `features`, `allFeatures`, `noDefaultFeatures` | unset | forwarded to Cargo for check and build alike |
 | `pinnedSourceSync` | `true` | install rsync from checksum-pinned Debian packages instead of `apt-get` |
 | `prepareProjectToolchain` | `true` | honor a root `rust-toolchain(.toml)` in a cached toolchain layer |
+| `extraPackages` | `[]` | extra Debian packages for build scripts (`cmake`, `pkg-config`, `libssl-dev`, ...); gcc and make are always present |
 
 ## Limitations
 

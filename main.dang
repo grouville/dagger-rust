@@ -30,6 +30,10 @@ type Rust {
   pub pinnedSourceSync: Boolean! = true
   pub prepareProjectToolchain: Boolean! = true
   pub locked: Boolean! = false
+  # Extra Debian packages for build scripts that need more than gcc and make
+  # (cmake, pkg-config, libssl-dev, ...). Installed with apt in the toolchain
+  # layer, so they cost cold time only once per package set.
+  pub extraPackages: [String!]! = []
 
   # These flags apply equally to check and build. Cargo's project configuration
   # remains authoritative when a value is omitted; no debug/linker overrides.
@@ -58,7 +62,12 @@ type Rust {
     assert("This prototype supports only the recorded Linux/amd64 Debian bookworm Rust image") {
       image == "rust@sha256:39f68a3e8e3ff425f8945ffa91128e60ff930d53e17fbb5214e95824bdd46f1b"
     }
-    let base = container.from(image)
+    let base = if (extraPackages.isEmpty) {
+      container.from(image)
+    } else {
+      container.from(image)
+        .withExec(["sh", "-c", "apt-get update -qq && apt-get install -y --no-install-recommends " + extraPackages.join(" ")])
+    }
     if (pinnedSourceSync) {
       base
         .withMountedFile("/tmp/rust-sync-libpopt.deb", http(
