@@ -116,7 +116,11 @@ type Rust {
     ws.directory("/", exclude: [".git", "target", "dagger.toml", "dagger.lock"])
   }
 
-  let action(source: Directory!, command: [String!]!, components: [String!]! = []): Container! {
+  # Each action kind (check, clippy, test, build) owns its source mirror and
+  # intermediate build directory. Sharing them would serialize the actions on
+  # their locks even though Dagger runs the checks concurrently; Cargo's
+  # registry and git caches use Cargo's own file locking and stay shared.
+  let action(lane: String!, source: Directory!, command: [String!]!, components: [String!]! = []): Container! {
     let script = if (tracePhases) {
       "set -eu; start=$(date +%s%N); rsync -rclp --delete /input/ /src/; synced=$(date +%s%N); mkdir -p /out /meta; \"$@\"; finished=$(date +%s%N); printf 'RUST_BENCH_PHASE_NS sync=%s cargo=%s\\n' \"$((synced-start))\" \"$((finished-synced))\" >&2"
     } else {
@@ -125,19 +129,19 @@ type Rust {
     projectToolchain(source, components)
       .withWorkdir("/src")
       .withMountedDirectory("/input", source)
-      .withMountedCache("/src", cacheVolume(cacheKey + "-source"), sharing: CacheSharingMode.LOCKED)
+      .withMountedCache("/src", cacheVolume(cacheKey + "-" + lane + "-source"), sharing: CacheSharingMode.LOCKED)
       .withMountedCache("/usr/local/cargo/registry", cacheVolume(cacheKey + "-registry"))
       .withMountedCache("/usr/local/cargo/git", cacheVolume(cacheKey + "-git"))
       # Cargo owns this mutable intermediate cache. /out is ordinary container
       # state: both fresh and dirty Cargo units publish final outputs there.
       .withEnvVariable("CARGO_BUILD_BUILD_DIR", "/build")
       .withEnvVariable("CARGO_TARGET_DIR", "/out")
-      .withMountedCache("/build", cacheVolume(cacheKey + "-build"), sharing: CacheSharingMode.LOCKED)
+      .withMountedCache("/build", cacheVolume(cacheKey + "-" + lane + "-build"), sharing: CacheSharingMode.LOCKED)
       .withExec(["sh", "-c", script, "rust-action"] + command)
   }
 
   let checkResult(source: Directory!): Container! {
-    action(source, ["cargo", "check"] + cargoFlags)
+    action("check", source, ["cargo", "check"] + cargoFlags)
   }
 
   let buildResult(source: Directory!): Container! {
@@ -146,7 +150,7 @@ type Rust {
     } else {
       "set -eu; cargo build --message-format=json-render-diagnostics \"$@\" > /meta/build.jsonl; cargo metadata --no-deps --format-version=1 > /meta/workspace.json; cp -p Cargo.lock /meta/Cargo.lock"
     }
-    action(source, ["sh", "-c", script, "rust-build"] + cargoFlags)
+    action("build", source, ["sh", "-c", script, "rust-build"] + cargoFlags)
   }
 
   # Cargo may mix arbitrary proc-macro stdout with JSON. Recover only while
@@ -225,7 +229,7 @@ type Rust {
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
   ): Void @check {
-    action(source, ["cargo", "clippy"] + cargoFlags, ["clippy"]).sync
+    action("clippy", source, ["cargo", "clippy"] + cargoFlags, ["clippy"]).sync
     null
   }
 
@@ -234,7 +238,7 @@ type Rust {
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
   ): Void @check {
-    action(source, ["cargo", "test"] + cargoFlags).sync
+    action("test", source, ["cargo", "test"] + cargoFlags).sync
     null
   }
 

@@ -36,7 +36,7 @@ Dagger results. The module owns `target/dagger` only. With `locked = false`,
 | Setting | Default | Meaning |
 |---|---|---|
 | `image` | pinned `rust` Debian bookworm image | toolchain image (only the pinned digest is supported today) |
-| `cacheKey` | `rust-v3` | prefix of the source/registry/git/build cache volumes; use one per project |
+| `cacheKey` | `rust-v3` | prefix of the cache volumes; use one per project. Each action (check, clippy, test, build) owns its source mirror and intermediate build directory so `dagger check` runs them concurrently; expect one build directory per action on disk and one cold first run per action |
 | `locked` | `false` | pass `--locked` to Cargo and require an existing `Cargo.lock` |
 | `cargoProfile`, `target`, `features`, `allFeatures`, `noDefaultFeatures` | unset | forwarded to Cargo for check and build alike |
 | `pinnedSourceSync` | `true` | install rsync from checksum-pinned Debian packages instead of `apt-get` |
