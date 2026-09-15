@@ -1,0 +1,336 @@
+pub description = "Cargo-compatible checks and immutable build artifacts through ordinary Dagger commands (integration candidate)"
+
+type CargoEnvelope {
+  reason: String
+}
+
+type CargoWorkspace {
+  workspaceMembers: [String!]! @JSON.field(name: "workspace_members")
+}
+
+type CargoTarget {
+  kind: [String!]!
+}
+
+type CargoArtifact {
+  packageID: String! @JSON.field(name: "package_id")
+  target: CargoTarget!
+  filenames: [String!]!
+  fresh: Boolean!
+}
+
+type CargoFinished {
+  success: Boolean!
+}
+
+type Rust {
+  pub image: String! = "rust@sha256:39f68a3e8e3ff425f8945ffa91128e60ff930d53e17fbb5214e95824bdd46f1b"
+  pub cacheKey: String! = "rust-v3"
+  pub tracePhases: Boolean! = false
+  pub pinnedSourceSync: Boolean! = true
+  pub prepareProjectToolchain: Boolean! = true
+  pub locked: Boolean! = false
+
+  # These flags apply equally to check and build. Cargo's project configuration
+  # remains authoritative when a value is omitted; no debug/linker overrides.
+  pub cargoProfile: String
+  pub target: String
+  pub features: [String!]! = []
+  pub allFeatures: Boolean! = false
+  pub noDefaultFeatures: Boolean! = false
+
+  let versionGuard: String! = """
+    set -eu
+    cargo_version=$(cargo --version)
+    if ! printf '%s\n' "$cargo_version" | awk '
+      $1 == "cargo" && $2 !~ /-/ {
+        split($2, v, ".")
+        if (v[1] > 1 || (v[1] == 1 && v[2] >= 91)) ok = 1
+      }
+      END { exit !ok }
+    '; then
+      printf 'This prototype requires stable Cargo >=1.91 for build.build-dir; selected: %s. No toolchain upgrade was performed.\n' "$cargo_version" >&2
+      exit 1
+    fi
+  """
+
+  let toolchain: Container! {
+    assert("This prototype supports only the recorded Linux/amd64 Debian bookworm Rust image") {
+      image == "rust@sha256:39f68a3e8e3ff425f8945ffa91128e60ff930d53e17fbb5214e95824bdd46f1b"
+    }
+    let base = container.from(image)
+    if (pinnedSourceSync) {
+      base
+        .withMountedFile("/tmp/rust-sync-libpopt.deb", http(
+          "https://deb.debian.org/debian/pool/main/p/popt/libpopt0_1.19%2Bdfsg-1_amd64.deb",
+          checksum: "sha256:6f94b488255acd996254f775c77ff3956557c61f860a3c9caeaf65457554194f",
+        ))
+        .withMountedFile("/tmp/rust-sync-rsync.deb", http(
+          "https://deb.debian.org/debian/pool/main/r/rsync/rsync_3.2.7-1%2Bdeb12u6_amd64.deb",
+          checksum: "sha256:ce99de6b36cbb62dc614a73463e467f2c1ef509545a9a2b33cab19b50530b672",
+        ))
+        .withExec(["sh", "-c", "test \"$(dpkg --print-architecture)\" = amd64 && dpkg -i /tmp/rust-sync-libpopt.deb /tmp/rust-sync-rsync.deb"])
+    } else {
+      base.withExec(["sh", "-c", "test \"$(dpkg --print-architecture)\" = amd64 && apt-get update -qq && apt-get install -y --no-install-recommends rsync"])
+    }
+  }
+
+  # The root toolchain files and requested component set key this immutable
+  # setup independently of application source. Build/check do not install
+  # Clippy or rustfmt unless the project itself requests those components.
+  let projectToolchain(source: Directory!, components: [String!]! = []): Container! {
+    let config = source.filter(include: ["rust-toolchain", "rust-toolchain.toml"])
+    let configured = toolchain
+      .withWorkdir("/src")
+      .withMountedDirectory("/src", config)
+    let prepared = if (config.entries.isEmpty) {
+      configured
+    } else {
+      assert("Project toolchain preparation is required when a root toolchain file exists") {
+        prepareProjectToolchain
+      }
+      configured.withExec(["rustup", "toolchain", "install", "--no-self-update"])
+    }
+    let equipped = if (components.isEmpty) {
+      prepared
+    } else {
+      # Keep the project config mounted here so rustup installs into the
+      # selected toolchain, not the image's possibly different default.
+      prepared.withExec(["rustup", "component", "add"] + components)
+    }
+    equipped.withExec(["sh", "-c", versionGuard]).withoutMount("/src")
+  }
+
+  let cargoFlags: [String!]! {
+    let flags: [String!]! = ["--workspace"]
+    if (locked) { flags += ["--locked"] }
+    if (cargoProfile != null) { flags += ["--profile", cargoProfile] }
+    if (target != null) { flags += ["--target", target] }
+    if (!features.isEmpty) { flags += ["--features", features.join(",")] }
+    if (allFeatures) { flags += ["--all-features"] }
+    if (noDefaultFeatures) { flags += ["--no-default-features"] }
+    flags
+  }
+
+  let source(ws: Workspace!): Directory! {
+    ws.directory("/", exclude: [".git", "target", "dagger.toml", "dagger.lock"])
+  }
+
+  let action(source: Directory!, command: [String!]!, components: [String!]! = []): Container! {
+    let script = if (tracePhases) {
+      "set -eu; start=$(date +%s%N); rsync -rclp --delete /input/ /src/; synced=$(date +%s%N); mkdir -p /out /meta; \"$@\"; finished=$(date +%s%N); printf 'RUST_BENCH_PHASE_NS sync=%s cargo=%s\\n' \"$((synced-start))\" \"$((finished-synced))\" >&2"
+    } else {
+      "set -eu; rsync -rclp --delete /input/ /src/; mkdir -p /out /meta; exec \"$@\""
+    }
+    projectToolchain(source, components)
+      .withWorkdir("/src")
+      .withMountedDirectory("/input", source)
+      .withMountedCache("/src", cacheVolume(cacheKey + "-source"), sharing: CacheSharingMode.LOCKED)
+      .withMountedCache("/usr/local/cargo/registry", cacheVolume(cacheKey + "-registry"))
+      .withMountedCache("/usr/local/cargo/git", cacheVolume(cacheKey + "-git"))
+      # Cargo owns this mutable intermediate cache. /out is ordinary container
+      # state: both fresh and dirty Cargo units publish final outputs there.
+      .withEnvVariable("CARGO_BUILD_BUILD_DIR", "/build")
+      .withEnvVariable("CARGO_TARGET_DIR", "/out")
+      .withMountedCache("/build", cacheVolume(cacheKey + "-build"), sharing: CacheSharingMode.LOCKED)
+      .withExec(["sh", "-c", script, "rust-action"] + command)
+  }
+
+  let checkResult(source: Directory!): Container! {
+    action(source, ["cargo", "check"] + cargoFlags)
+  }
+
+  let buildResult(source: Directory!): Container! {
+    let script = if (locked) {
+      "set -eu; cargo build --message-format=json-render-diagnostics \"$@\" > /meta/build.jsonl; cargo metadata --no-deps --format-version=1 --locked > /meta/workspace.json"
+    } else {
+      "set -eu; cargo build --message-format=json-render-diagnostics \"$@\" > /meta/build.jsonl; cargo metadata --no-deps --format-version=1 > /meta/workspace.json; cp -p Cargo.lock /meta/Cargo.lock"
+    }
+    action(source, ["sh", "-c", script, "rust-build"] + cargoFlags)
+  }
+
+  # Cargo may mix arbitrary proc-macro stdout with JSON. Recover only while
+  # recognizing the envelope; recognized artifact/success records are strict.
+  let envelope(line: String!): CargoEnvelope {
+    (JSON.decode(line) :: CargoEnvelope!) rescue null
+  }
+
+  let selectedArtifacts(source: Directory!): Directory! {
+    let result = buildResult(source)
+    let metadata: CargoWorkspace! = JSON.decode(result.file("/meta/workspace.json").contents)
+    let lines = result.file("/meta/build.jsonl").contents.split("\n")
+    let paths: [String!]! = []
+    let finished: Boolean! = false
+    lines.each { line =>
+      let header = envelope(line)
+      if (header != null) {
+        if (header.reason == "build-finished") {
+          let status: CargoFinished! = JSON.decode(line)
+          assert("Cargo did not report a successful build") { status.success }
+          finished = true
+        }
+        if (header.reason == "compiler-artifact") {
+          let artifact: CargoArtifact! = JSON.decode(line)
+          if (metadata.workspaceMembers.contains(artifact.packageID) and !artifact.target.kind.contains("custom-build")) {
+            # Deliberately include fresh=true. Ignoring fresh artifacts would
+            # delete unchanged outputs from the generated workspace subtree.
+            artifact.filenames.each { filename =>
+              assert("Cargo artifact path must belong to the managed output or intermediate directory") {
+                filename.hasPrefix("/out/") or filename.hasPrefix("/build/")
+              }
+              if (filename.hasPrefix("/out/")) {
+                let relative = filename.trimPrefix("/out/")
+                let parts = relative.split("/")
+                assert("Cargo final artifact path must be a nonempty canonical relative path") {
+                  !parts.contains("") and !parts.contains(".") and !parts.contains("..")
+                }
+                if (!paths.contains(relative)) { paths += [relative] }
+              }
+            }
+          }
+        }
+      }
+    }
+    assert("Missing successful Cargo build-finished record") { finished }
+    assert("Cargo reported no workspace final artifacts; refusing to replace generated outputs") {
+      !paths.isEmpty
+    }
+    let out = result.directory("/out")
+    paths.reduce(directory) { selected, relative =>
+      # Exact paths, not globs, avoid wildcard expansion and basename collisions.
+      let kind = out.stat(relative, doNotFollowSymlinks: true).fileType
+      if (kind == FileType.DIRECTORY) {
+        selected.withDirectory(relative, out.directory(relative))
+      } else {
+        assert("Expected a regular final artifact; symlink outputs are not supported by this prototype") {
+          kind == FileType.REGULAR
+        }
+        selected.withFile(relative, out.file(relative))
+      }
+    }
+  }
+
+  # Resolve the project's content before function cache lookup. Workspace is
+  # session-bound; a Directory lets identical sources reuse the whole result.
+  pub check(
+    source: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+  ): Void @check {
+    checkResult(source).sync
+    null
+  }
+
+  """Clippy with the project's own lint policy; warnings are not promoted implicitly."""
+  pub clippy(
+    source: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+  ): Void @check {
+    action(source, ["cargo", "clippy"] + cargoFlags, ["clippy"]).sync
+    null
+  }
+
+  """Run the workspace tests using the same source and incremental cache boundary."""
+  pub test(
+    source: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+  ): Void @check {
+    action(source, ["cargo", "test"] + cargoFlags).sync
+    null
+  }
+
+  """Check formatting without locking Cargo's mutable source or build caches."""
+  pub fmt(
+    source: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+  ): Void @check {
+    projectToolchain(source, ["rustfmt"])
+      .withWorkdir("/src")
+      .withMountedDirectory("/src", source)
+      .withExec(["cargo", "fmt", "--all", "--", "--check"])
+      .sync
+    null
+  }
+
+  """Evaluate the same build action as generate, without exporting host artifacts."""
+  pub compile(ws: Workspace!): Void {
+    buildResult(source(ws)).sync
+    null
+  }
+
+  pub checkLog(ws: Workspace!): String! {
+    checkResult(source(ws)).stderr
+  }
+
+  """Build workspace binaries/libraries and return only current final artifacts."""
+  pub artifacts(ws: Workspace!): Directory! {
+    selectedArtifacts(source(ws))
+  }
+
+  """
+  Build and replace the module-owned target/dagger subtree with current artifacts.
+  When unlocked, also return Cargo's generated or updated Cargo.lock, as a native
+  build would. Other target contents and project sources remain unchanged.
+  """
+  pub build(
+    source: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+    outputState: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: ["**", "!Cargo.lock", "!target", "target/**", "!target/dagger", "!target/dagger/**"]),
+  ): Changeset! @generate {
+    let observedPaths = if (locked) {
+      ["target/dagger", "target/dagger/**"]
+    } else {
+      ["Cargo.lock", "target/dagger", "target/dagger/**"]
+    }
+    # A missing managed child does not import its existing parent. Bring in
+    # that parent's metadata without reading unrelated Cargo target contents.
+    let parents = outputState.filter(include: ["target"], exclude: ["target/*"])
+    let observed = outputState.filter(include: observedPaths)
+    let current = directory.withDirectory("/", parents).withDirectory("/", observed)
+    if (!locked and current.exists("Cargo.lock", doNotFollowSymlinks: true)) {
+      assert("Unlocked generation requires Cargo.lock to be a regular file, not a symlink or directory") {
+        current.stat("Cargo.lock", doNotFollowSymlinks: true).fileType == FileType.REGULAR
+      }
+    }
+    if (current.exists("target", doNotFollowSymlinks: true)) {
+      assert("The generator requires target to be a real workspace directory, not a symlink") {
+        current.stat("target", doNotFollowSymlinks: true).fileType == FileType.DIRECTORY
+      }
+    }
+    if (current.exists("target/dagger", doNotFollowSymlinks: true)) {
+      assert("The generator owns a directory at target/dagger; refusing to replace another file type") {
+        current.stat("target/dagger", doNotFollowSymlinks: true).fileType == FileType.DIRECTORY
+      }
+    }
+    # Retain metadata on existing ancestors, notably the user's target mode.
+    # Only the module-owned child is replaced, including obsolete outputs.
+    let artifacts = current
+      .withoutDirectory("target/dagger")
+      .withDirectory("target/dagger", selectedArtifacts(source))
+    let desired = if (locked) {
+      artifacts
+    } else {
+      # Capture the actual lockfile inside the successful Cargo action. Do not
+      # retain an unkeyed lock only in a shared mutable source cache: the next
+      # reconciliation would delete it, changing dependency selection on an
+      # unrelated source edit. Applying this normal Changeset makes the lock
+      # an explicit input to subsequent checks/builds.
+      artifacts.withFile("Cargo.lock", buildResult(source).file("/meta/Cargo.lock"))
+    }
+    desired.changes(current)
+  }
+
+  """Cargo diagnostics from the same immutable build action (not an execution proof)."""
+  pub buildLog(ws: Workspace!): String! {
+    buildResult(source(ws)).stderr
+  }
+
+  """Cargo artifact/freshness messages from the same immutable build action."""
+  pub buildMessages(ws: Workspace!): File! {
+    buildResult(source(ws)).file("/meta/build.jsonl")
+  }
+
+  pub toolchainFiles(ws: Workspace!): Directory! {
+    projectToolchain(source(ws)).directory("/usr/local/rustup/toolchains")
+  }
+}
