@@ -154,8 +154,12 @@ type Rust {
   # The source is reconciled into the lane's mutable mirror with rsync by
   # checksum rather than mounted directly: Cargo's freshness checks use mtimes,
   # and a mirror keeps them stable for unchanged files across commands.
+  # Deleted files are removed from the mirror, except paths the project's own
+  # .gitignore files ignore: build scripts that write into the tree (helix's
+  # tree-sitter grammars, for example) keep their outputs between runs, as
+  # they would natively.
   let action(lane: String!, source: Directory!, command: [String!]!, components: [String!]! = []): Container! {
-    let script = "set -eu; " + layoutSelect + "; rsync -rclp --delete /input/ /src/; mkdir -p /out /meta; exec \"$@\""
+    let script = "set -eu; " + layoutSelect + "; rsync -rclp --delete --filter=':- .gitignore' /input/ /src/; mkdir -p /out /meta; exec \"$@\""
     projectToolchain(source, components)
       .withWorkdir("/src")
       .withMountedDirectory("/input", source)
