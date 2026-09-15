@@ -69,9 +69,15 @@ type Rust {
           "https://deb.debian.org/debian/pool/main/r/rsync/rsync_3.2.7-1%2Bdeb12u6_amd64.deb",
           checksum: "sha256:ce99de6b36cbb62dc614a73463e467f2c1ef509545a9a2b33cab19b50530b672",
         ))
-        .withExec(["sh", "-c", "test \"$(dpkg --print-architecture)\" = amd64 && dpkg -i /tmp/rust-sync-libpopt.deb /tmp/rust-sync-rsync.deb"])
+        # The image ships gcc but not make; crates with autotools build scripts
+        # (e.g. tikv-jemalloc-sys, used by fd and ruff) need it.
+        .withMountedFile("/tmp/rust-make.deb", http(
+          "https://deb.debian.org/debian/pool/main/m/make-dfsg/make_4.3-4.1_amd64.deb",
+          checksum: "sha256:a1a83af8cbd854af887b72ad196b1f4af58387815e21ced1000253a116a46e2a",
+        ))
+        .withExec(["sh", "-c", "test \"$(dpkg --print-architecture)\" = amd64 && dpkg -i /tmp/rust-sync-libpopt.deb /tmp/rust-sync-rsync.deb /tmp/rust-make.deb"])
     } else {
-      base.withExec(["sh", "-c", "test \"$(dpkg --print-architecture)\" = amd64 && apt-get update -qq && apt-get install -y --no-install-recommends rsync"])
+      base.withExec(["sh", "-c", "test \"$(dpkg --print-architecture)\" = amd64 && apt-get update -qq && apt-get install -y --no-install-recommends rsync make"])
     }
   }
 
