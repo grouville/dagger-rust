@@ -9,7 +9,7 @@ In the workspace root, `dagger.toml`:
 
 ```toml
 [modules.rust]
-source = "https://github.com/grouville/dagger-rust"
+source = "https://github.com/grouville/dagger/modules/rust@rust-module"
 
 [modules.rust.settings]
 locked = true
