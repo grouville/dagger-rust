@@ -34,11 +34,12 @@ func ArtifactPath(filename string) string {
 }
 
 type Request struct {
-	Actions      []model.Action  `json:"actions"`
-	Dependencies []model.Action  `json:"dependencies"`
-	Packages     []model.Package `json:"packages"`
-	Concurrency  int             `json:"concurrency"`
-	Pipelining   bool            `json:"pipelining"`
+	Actions       []model.Action  `json:"actions"`
+	Dependencies  []model.Action  `json:"dependencies"`
+	Packages      []model.Package `json:"packages"`
+	Concurrency   int             `json:"concurrency"`
+	Pipelining    bool            `json:"pipelining"`
+	NoIncremental bool            `json:"no_incremental,omitempty"`
 }
 
 type Timing struct {
@@ -89,7 +90,7 @@ func Run(ctx context.Context, request Request) ([]Timing, error) {
 				}
 				delete(pending, id)
 				active++
-				go compile(ctx, action, request.Dependencies, request.Packages, events)
+				go compile(ctx, action, request.Dependencies, request.Packages, !request.NoIncremental, events)
 			}
 		}
 		if active == 0 {
@@ -172,7 +173,7 @@ func sortedIDs(actions map[string]model.Action) []string {
 	return ids
 }
 
-func compile(ctx context.Context, action model.Action, dependencies []model.Action, packages []model.Package, events chan<- event) {
+func compile(ctx context.Context, action model.Action, dependencies []model.Action, packages []model.Package, incremental bool, events chan<- event) {
 	started := time.Now()
 	private := path.Join(TargetRoot, ".rcexp-private", Token(action.ID))
 	observer := metadataObserver{started: started, notify: func() error {
@@ -205,7 +206,9 @@ func compile(ctx context.Context, action model.Action, dependencies []model.Acti
 				args[i] = strings.ReplaceAll(arg, "="+model.TargetRoot+"/", "="+private+"/")
 			}
 		}
-		args = append(args, "-C", "incremental="+state)
+		if incremental {
+			args = append(args, "-C", "incremental="+state)
+		}
 		command := exec.CommandContext(ctx, action.Compiler, args...)
 		command.Dir = action.Cwd
 		command.Env = environment(action, os.Environ())

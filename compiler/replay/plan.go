@@ -70,7 +70,7 @@ func validateGraph(plan *model.Plan) error {
 	if plan.Version != model.Version {
 		return fmt.Errorf("unsupported plan version %d", plan.Version)
 	}
-	if plan.CargoCommand != "" && plan.CargoCommand != "build" && plan.CargoCommand != "check" {
+	if plan.CargoCommand != "" && plan.CargoCommand != "build" && plan.CargoCommand != "check" && plan.CargoCommand != "test" {
 		return fmt.Errorf("unsupported captured Cargo command %s", plan.CargoCommand)
 	}
 	if !strings.Contains(plan.Image, "@sha256:") {
@@ -93,13 +93,18 @@ func validateGraph(plan *model.Plan) error {
 		if !path.IsAbs(a.Compiler) || model.Within(model.SourceRoot, a.Compiler) || model.Within(model.TargetRoot, a.Compiler) {
 			return fmt.Errorf("action %s requires a compiler from the toolchain image", a.ID)
 		}
-		if slices.Contains(a.Args, "--test") || strings.Contains(strings.Join(a.Args, " "), "incremental=") {
+		if (slices.Contains(a.Args, "--test") && plan.CargoCommand != "test") || strings.Contains(strings.Join(a.Args, " "), "incremental=") {
 			return fmt.Errorf("action %s uses unsupported test or incremental compilation", a.ID)
 		}
 		if model.Option(a.Args, "--target") != "" {
 			return fmt.Errorf("action %s selects an unsupported custom or cross-compilation target", a.ID)
 		}
 		for _, kind := range strings.Split(model.Option(a.Args, "--crate-type"), ",") {
+			// Cargo omits --crate-type for both libtest and harness=false
+			// executables. rustc's default binary mode is valid in a test plan.
+			if kind == "" && plan.CargoCommand == "test" {
+				continue
+			}
 			if kind != "lib" && kind != "rlib" && kind != "bin" {
 				return fmt.Errorf("unsupported crate type %q in %s", kind, a.ID)
 			}
@@ -136,6 +141,30 @@ func validateGraph(plan *model.Plan) error {
 		dependencies = slices.Compact(dependencies)
 		// Dependency edges are derived rather than trusted from the plan file.
 		a.Dependencies = dependencies
+	}
+	publications := map[string]bool{}
+	for _, publication := range plan.Publications {
+		if producers[publication.Output] == "" || publication.Path == "" || publication.Path == "." ||
+			path.IsAbs(publication.Path) || path.Clean(publication.Path) != publication.Path || strings.HasPrefix(publication.Path, "../") || publications[publication.Path] {
+			return fmt.Errorf("invalid or duplicate final artifact %q", publication.Path)
+		}
+		publications[publication.Path] = true
+	}
+	for _, command := range plan.Tests {
+		if plan.CargoCommand != "test" || !model.Within(model.SourceRoot, command.Cwd) || path.Clean(command.Cwd) != command.Cwd {
+			return fmt.Errorf("invalid captured test working directory")
+		}
+		if command.Executable != "rustdoc" && producers[command.Executable] == "" {
+			return fmt.Errorf("test executable is not a captured compiler output")
+		}
+		for name := range command.Env {
+			if name == "TRACEPARENT" || name == "TRACESTATE" || name == "BAGGAGE" {
+				continue // Replay drops legacy recording-session context.
+			}
+			if name == "" || strings.ContainsAny(name, "=\x00") || model.TestTransportEnvironment(name) {
+				return fmt.Errorf("invalid captured test environment %q", name)
+			}
+		}
 	}
 	_, err := ordered(plan.Actions)
 	return err

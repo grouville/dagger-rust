@@ -38,7 +38,7 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 		return BuildWithOptions(client, plan, source, opts)
 	}
 	request := worker.Request{Actions: missing, Dependencies: plan.Actions, Packages: plan.Packages,
-		Concurrency: opts.BatchWorkers, Pipelining: !opts.BatchNoPipelining}
+		Concurrency: opts.BatchWorkers, Pipelining: !opts.BatchNoPipelining, NoIncremental: opts.BatchNoIncremental}
 	contents, err := json.Marshal(request)
 	if err != nil {
 		return nil, err

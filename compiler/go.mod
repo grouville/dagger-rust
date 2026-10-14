@@ -24,6 +24,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
+	github.com/pelletier/go-toml v1.9.5
 	github.com/sosodev/duration v1.4.0 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.32
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

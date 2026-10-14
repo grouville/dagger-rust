@@ -6869,6 +6869,15 @@ func (r *Directory) Changes(from *Directory) *Changeset {
 	}
 }
 
+func (r *Directory) Checkpoint() *Directory {
+	q := r.query.Select("checkpoint")
+
+	return &Directory{
+		query:     q,
+		refetchID: r.refetchID,
+	}
+}
+
 // Change the owner of the directory contents recursively.
 func (r *Directory) Chown(path string, owner string) *Directory {
 	q := r.query.Select("chown")
@@ -17087,11 +17096,13 @@ type Query struct {
 	// field again.
 	refetchID bool
 
-	currentTimestamp *string
-	defaultPlatform  *Platform
-	id               *ID
-	serveModule      *Void
-	version          *string
+	currentTimestamp    *string
+	defaultPlatform     *Platform
+	id                  *ID
+	nativeCacheHint     *ID
+	saveNativeCacheHint *bool
+	serveModule         *Void
+	version             *string
 }
 
 func (r *Query) WithGraphQLQuery(q *querybuilder.Selection) *Query {
@@ -17690,6 +17701,16 @@ func (r *Query) ModuleSource(refString string, opts ...ModuleSourceOpts) *Module
 	}
 }
 
+func (r *Query) NativeCacheHint(ctx context.Context, key string) (ID, error) {
+	q := r.query.Select("nativeCacheHint")
+	q = q.Arg("key", key)
+
+	var response ID
+
+	q = q.Bind(&response)
+	return response, q.Execute(ctx)
+}
+
 // Load any object by its ID.
 func (r *Query) Node(ctx context.Context, id ID) (Node, error) {
 	q := r.query.Select("node")
@@ -17706,6 +17727,17 @@ func (r *Query) Node(ctx context.Context, id ID) (Node, error) {
 	return &NodeClient{
 		query: selectNode(q.Root(), *objectID, "Node"),
 	}, nil
+}
+
+func (r *Query) SaveNativeCacheHint(ctx context.Context, key string, value ID) (bool, error) {
+	q := r.query.Select("saveNativeCacheHint")
+	q = q.Arg("key", key)
+	q = q.Arg("value", value)
+
+	var response bool
+
+	q = q.Bind(&response)
+	return response, q.Execute(ctx)
 }
 
 // Load a GraphQL introspection schema for merging.

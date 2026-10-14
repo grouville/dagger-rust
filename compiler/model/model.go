@@ -30,6 +30,31 @@ type Plan struct {
 	Actions            []Action          `json:"actions"`
 	BaselineDigests    map[string]string `json:"baseline_digests"`
 	CaptureSeconds     float64           `json:"capture_seconds"`
+	Publications       []Publication     `json:"publications,omitempty"`
+	Tests              []TestCommand     `json:"tests,omitempty"`
+}
+
+// TestCommand records Cargo's actual unit, integration or rustdoc invocation.
+type TestCommand struct {
+	Executable string            `json:"executable"`
+	Args       []string          `json:"args"`
+	Cwd        string            `json:"cwd"`
+	Env        map[string]string `json:"env"`
+}
+
+// TestTransportEnvironment identifies capture and tracing state belonging to
+// the recording session, rather than the test invocation being replayed.
+func TestTransportEnvironment(name string) bool {
+	return strings.HasPrefix(name, "DAGGER_") || strings.HasPrefix(name, "_DAGGER_") ||
+		strings.HasPrefix(name, "OTEL_") || strings.HasPrefix(name, "RCE_") ||
+		name == "TRACEPARENT" || name == "TRACESTATE" || name == "BAGGAGE" ||
+		name == "RUSTC_WRAPPER" || name == "RUSTDOC" || name == "CARGO_MAKEFLAGS" || name == "MAKEFLAGS"
+}
+
+// Publication maps a compiler output to Cargo's final workspace artifact path.
+type Publication struct {
+	Output string `json:"output"`
+	Path   string `json:"path"`
 }
 
 type Package struct {

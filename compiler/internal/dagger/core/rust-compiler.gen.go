@@ -95,6 +95,8 @@ type RustCompilerCompileOpts struct {
 	CargoFlags []string
 	// Expected toolchain image, when called by the Rust module's normal action.
 	Image string
+	// Disable rustc incremental state for reproducible generated artifacts.
+	NoIncremental bool
 }
 
 // Compile keeps exact results and compatible incremental state separately.
@@ -138,6 +140,10 @@ func (r *RustCompiler) Compile(source *Directory, opts ...RustCompilerCompileOpt
 		// `image` optional argument
 		if !querybuilder.IsZeroValue(opts[i].Image) {
 			q = q.Arg("image", opts[i].Image)
+		}
+		// `noIncremental` optional argument
+		if !querybuilder.IsZeroValue(opts[i].NoIncremental) {
+			q = q.Arg("noIncremental", opts[i].NoIncremental)
 		}
 	}
 	q = q.Arg("source", source)
@@ -457,4 +463,22 @@ func (r *RustCompilerCompilation) UnmarshalJSON(bs []byte) error {
 	}
 	*r = RustCompilerCompilation{query: selectNode(dag.QueryBuilder(), id, "RustCompilerCompilation")}
 	return nil
+}
+
+func (r *RustCompilerCompilation) Published() *Directory {
+	q := r.query.Select("published")
+
+	return &Directory{
+		query:     q,
+		refetchID: r.refetchID,
+	}
+}
+
+func (r *RustCompilerCompilation) Tests() *Container {
+	q := r.query.Select("tests")
+
+	return &Container{
+		query:     q,
+		refetchID: r.refetchID,
+	}
 }

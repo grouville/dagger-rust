@@ -57,6 +57,7 @@ type BuildOptions struct {
 	BatchCompiler      *dagger.File
 	BatchWorkers       int
 	BatchNoPipelining  bool
+	BatchNoIncremental bool
 	automatic          *automaticInputs
 	nativeCache        *NativeCache
 	nativeConfigDigest string

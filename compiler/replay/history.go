@@ -181,7 +181,11 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 			return nil, err
 		}
 	}
-	configuration, err := historyDigest([]any{recipeConfiguration(plan), workerDigest, opts.BatchWorkers, opts.BatchNoPipelining})
+	configurationInputs := []any{recipeConfiguration(plan), workerDigest, opts.BatchWorkers, opts.BatchNoPipelining}
+	if opts.BatchNoIncremental {
+		configurationInputs = append(configurationInputs, "no-incremental")
+	}
+	configuration, err := historyDigest(configurationInputs)
 	if err != nil {
 		return nil, err
 	}

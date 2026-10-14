@@ -32,6 +32,8 @@ type NativeCache {
 
 type NativeCompilation {
   pub artifacts: Directory!
+  published: Directory!
+  tests: Container
   pub cache: NativeCache!
   pub hits: Int!
   pub actions: Int!
@@ -207,12 +209,13 @@ type Rust {
     action("check", source, ["cargo", "check"] + cargoFlags)
   }
 
-  let nativeCheckResult(source: Directory!, previous: NativeCache): NativeCompilation! {
+  let nativeCompilationResult(command: String!, source: Directory!, previous: NativeCache, noIncremental: Boolean! = false): NativeCompilation! {
     assert("The experimental compiler backend requires a locked workspace and no extra packages") {
       locked and extraPackages.isEmpty
     }
     let retained = previous ?? compilerCache
-    let hintKey = cacheKey + "-native-check"
+    let modeSuffix = if (noIncremental) { "-reproducible" } else { "" }
+    let hintKey = cacheKey + "-native-" + command + modeSuffix
     let hintID = if (retained == null) { Dagger.nativeCacheHint(key: hintKey) } else { null }
     let previousFields = if (retained == null) {
       if (hintID == null) {
@@ -231,11 +234,13 @@ type Rust {
     } else {
       retained
     }
-    let selectedPlan = compilerPlan ?? previousFields.plan
-    let compiled = rustCompiler.compile(source, plan: selectedPlan, automaticPlan: compilerPlan == null,
+    let requestedPlan = if (command == "check") { compilerPlan } else { null }
+    let selectedPlan = requestedPlan ?? previousFields.plan
+    let result = rustCompiler.compile(source, plan: selectedPlan, automaticPlan: requestedPlan == null,
       previousManifest: previousFields.manifest, previousTokens: previousFields.tokens, previousSnapshots: previousFields.snapshots,
-      workers: 8, command: "check", cargoFlags: cargoFlags, image: image).{{
-        artifacts.{{id}},
+      workers: 8, command: command, cargoFlags: cargoFlags, image: image, noIncremental: noIncremental)
+    let compiled = result.{{
+        artifacts.{{id}}, published.{{id}},
         cache.{{id, plan.{{id}}, manifest, tokens, snapshots.{{id}}}},
         hits, actions
       }}
@@ -244,6 +249,11 @@ type Rust {
     }
     NativeCompilation(
       artifacts: node(compiled.artifacts.id!).{{... on Directory!}},
+      published: node(compiled.published.id!).{{... on Directory!}},
+      tests: if (command == "test") {
+        let execution = result.tests!.{{id}}
+        node(execution.id!).{{... on Container!}}
+      } else { null },
       cache: NativeCache(
         plan: node(compiled.cache.plan.id!).{{... on File!}},
         manifest: compiled.cache.manifest,
@@ -253,6 +263,10 @@ type Rust {
       hits: compiled.hits,
       actions: compiled.actions,
     )
+  }
+
+  let nativeCheckResult(source: Directory!, previous: NativeCache): NativeCompilation! {
+    nativeCompilationResult("check", source, previous)
   }
 
   """Capture the compiler graph for a locked, path-only workspace. Recapture when Cargo configuration changes."""
@@ -274,6 +288,24 @@ type Rust {
     previous: NativeCache,
   ): NativeCompilation! @cache(policy: FunctionCachePolicy.Never) {
     nativeCheckResult(source, previous)
+  }
+
+  """Build and return native compiler outputs and incremental state for the next edit."""
+  nativeBuild(
+    source: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+    previous: NativeCache,
+  ): NativeCompilation! @cache(policy: FunctionCachePolicy.Never) {
+    nativeCompilationResult("build", source, previous)
+  }
+
+  """Compile workspace tests with native state and return their Cargo-compatible execution."""
+  nativeTest(
+    source: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+    previous: NativeCache,
+  ): NativeCompilation! @cache(policy: FunctionCachePolicy.Never) {
+    nativeCompilationResult("test", source, previous)
   }
 
   """Reconstruct a transferred cache with this engine's native directories."""
@@ -298,6 +330,9 @@ type Rust {
   }
 
   let selectedArtifacts(source: Directory!): Directory! {
+    if (nativeCache) {
+      return nativeCompilationResult("build", source, null, true).published
+    }
     let result = buildResult(source)
     let metadata: CargoWorkspace! = JSON.decode(result.file("/meta/workspace.json").contents)
     let lines = result.file("/meta/build.jsonl").contents.split("\n")
@@ -381,8 +416,12 @@ type Rust {
   pub test(
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
-  ): Void @check {
-    action("test", source, ["cargo", "test"] + cargoFlags).sync
+  ): Void @check @cache(policy: FunctionCachePolicy.Never) {
+    if (nativeCache) {
+      nativeCompilationResult("test", source, null).tests!.sync
+    } else {
+      action("test", source, ["cargo", "test"] + cargoFlags).sync
+    }
     null
   }
 

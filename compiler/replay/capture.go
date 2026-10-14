@@ -18,6 +18,7 @@ const DefaultImage = "rust:1.77-bookworm@sha256:83101f6985c93e1e6501b3375de188ee
 type CaptureOptions struct {
 	Image           string
 	Wrapper         *dagger.File
+	TestRecorder    *dagger.File
 	CargoArgs       []string
 	Command         string
 	Environment     map[string]string
@@ -35,8 +36,13 @@ func Capture(ctx context.Context, client *dagger.Query, source Source, opts Capt
 	if opts.Command == "" {
 		opts.Command = "build"
 	}
-	if opts.Command != "build" && opts.Command != "check" {
+	if opts.Command != "build" && opts.Command != "check" && opts.Command != "test" {
 		return nil, fmt.Errorf("unsupported Cargo command %s", opts.Command)
+	}
+	if opts.Command == "test" {
+		if err := validateTestConfiguration(source); err != nil {
+			return nil, err
+		}
 	}
 	base := client.Container(dagger.ContainerOpts{Platform: "linux/amd64"}).From(opts.Image)
 	image, err := base.ImageRef(ctx)
@@ -81,7 +87,26 @@ func Capture(ctx context.Context, client *dagger.Query, source Source, opts Capt
 			return nil, fmt.Errorf("unsupported Cargo argument %s", arg)
 		}
 	}
-	args := append([]string{"cargo", opts.Command, "--workspace", "--locked", "--offline"}, opts.CargoArgs...)
+	args := append([]string{"cargo", opts.Command, "--workspace", "--locked", "--offline", "--message-format=json-render-diagnostics"}, opts.CargoArgs...)
+	if opts.Command == "test" {
+		if opts.TestRecorder == nil {
+			return nil, fmt.Errorf("test command recorder is required")
+		}
+		runner, err := ctr.EnvVariable(ctx, "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER")
+		if err != nil {
+			return nil, err
+		}
+		if runner != "" {
+			return nil, fmt.Errorf("native test capture does not yet support Cargo target runners")
+		}
+		if err := validateImageTestConfiguration(ctx, ctr); err != nil {
+			return nil, err
+		}
+		ctr = ctr.WithMountedFile("/opt/test-recorder", opts.TestRecorder).
+			WithMountedFile("/opt/rustdoc-recorder", opts.TestRecorder).
+			WithEnvVariable("RUSTDOC", "/opt/rustdoc-recorder")
+		args = append(args, "--config", `target.x86_64-unknown-linux-gnu.runner="/opt/test-recorder"`)
+	}
 	compiled := ctr.WithMountedFile("/opt/rustc-wrapper", opts.Wrapper).
 		WithEnvVariable("RUSTC_WRAPPER", "/opt/rustc-wrapper").
 		WithEnvVariable("RCE_CAPTURE_DIR", model.CaptureRoot).
@@ -107,6 +132,32 @@ func Capture(ctx context.Context, client *dagger.Query, source Source, opts Capt
 		plan.Actions = append(plan.Actions, a)
 	}
 	sort.Slice(plan.Actions, func(i, j int) bool { return plan.Actions[i].ID < plan.Actions[j].ID })
+	if err := Validate(plan, source); err != nil {
+		return nil, err
+	}
+	if opts.Command == "build" || opts.Command == "test" {
+		messages, err := compiled.Stdout(ctx)
+		if err != nil {
+			return nil, err
+		}
+		plan.Publications, err = buildPublications(metadataJSON, messages, plan.Actions, opts.Command == "test")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if opts.Command == "test" {
+		commands, err := records.File("tests.jsonl").Contents(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read captured tests: %w", err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(commands), "\n") {
+			var command model.TestCommand
+			if err := json.Unmarshal([]byte(line), &command); err != nil {
+				return nil, err
+			}
+			plan.Tests = append(plan.Tests, command)
+		}
+	}
 	if err := Validate(plan, source); err != nil {
 		return nil, err
 	}

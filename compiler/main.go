@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	core "dagger.io/dagger/core"
 	"github.com/dagger/querybuilder"
@@ -29,6 +30,8 @@ type Compilation struct {
 	Cache     *Cache
 	Hits      int
 	Actions   int
+	Published *dagger.Directory
+	Tests     *dagger.Container
 }
 
 // Capture records the compiler graph for a supported, locked Cargo workspace.
@@ -50,10 +53,18 @@ func (m *RustCompiler) Capture(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	plan, err := replay.CaptureNative(ctx, query, native, replay.CaptureOptions{
+	opts := replay.CaptureOptions{
 		Image: image, Command: command, CargoArgs: cargoArgs,
 		Wrapper: core.Ref[*core.File](query, core.ID(wrapper)),
-	})
+	}
+	if command == "test" {
+		recorder, err := m.tools().File("/out/test-recorder").ID(ctx)
+		if err != nil {
+			return nil, err
+		}
+		opts.TestRecorder = core.Ref[*core.File](query, core.ID(recorder))
+	}
+	plan, err := replay.CaptureNative(ctx, query, native, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -90,6 +101,9 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	// Expected toolchain image, when called by the Rust module's normal action.
 	// +optional
 	image string,
+	// Disable rustc incremental state for reproducible generated artifacts.
+	// +optional
+	noIncremental bool,
 ) (*Compilation, error) {
 	if plan == nil && !automaticPlan {
 		return nil, fmt.Errorf("compiler plan is required")
@@ -120,7 +134,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		}
 	}
 	if automaticPlan {
-		if resolvedImage == "" || (command != "check" && command != "build") || len(cargoFlags) < 2 ||
+		if resolvedImage == "" || (command != "check" && command != "build" && command != "test") || len(cargoFlags) < 2 ||
 			!slices.Equal(cargoFlags[:2], []string{"--workspace", "--locked"}) {
 			return nil, fmt.Errorf("automatic plans require an image, a build/check command and --workspace --locked")
 		}
@@ -135,6 +149,13 @@ func (m *RustCompiler) Compile(ctx context.Context,
 				return nil, err
 			}
 			opts.Wrapper = core.Ref[*core.File](query, core.ID(wrapper))
+			if command == "test" {
+				recorder, err := m.tools().File("/out/test-recorder").ID(ctx)
+				if err != nil {
+					return nil, err
+				}
+				opts.TestRecorder = core.Ref[*core.File](query, core.ID(recorder))
+			}
 			captured, err := replay.CaptureNative(ctx, query, native, opts)
 			if err != nil {
 				return nil, err
@@ -181,7 +202,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		return nil, err
 	}
 	graph, err := replay.BuildNativeCached(ctx, query, &recipe, native, replay.BuildOptions{
-		BatchCompiler: core.Ref[*core.File](query, core.ID(runner)), BatchWorkers: workers,
+		BatchCompiler: core.Ref[*core.File](query, core.ID(runner)), BatchWorkers: workers, BatchNoIncremental: noIncremental,
 	}, retained)
 	if err != nil {
 		return nil, err
@@ -218,7 +239,28 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		cache.Tokens = append(cache.Tokens, batch.ID)
 		cache.Snapshots = append(cache.Snapshots, dagger.Ref[*dagger.Directory](dag, dagger.ID(saved.Checkpoint.ID)))
 	}
-	return &Compilation{Artifacts: dagger.Ref[*dagger.Directory](dag, dagger.ID(artifacts)), Cache: cache,
+	published := dag.Directory()
+	for _, publication := range recipe.Publications {
+		published = published.WithFile(publication.Path,
+			dagger.Ref[*dagger.Directory](dag, dagger.ID(artifacts)).File(strings.TrimPrefix(publication.Output, model.TargetRoot+"/")))
+	}
+	var tests *dagger.Container
+	if command == "test" {
+		target := core.Ref[*core.Directory](query, artifacts)
+		for _, publication := range recipe.Publications {
+			target = target.WithFile(publication.Path, graph.Artifacts.File(strings.TrimPrefix(publication.Output, model.TargetRoot+"/")))
+		}
+		run, err := replay.TestExecution(query, &recipe, native, target)
+		if err != nil {
+			return nil, err
+		}
+		id, err := run.ID(ctx)
+		if err != nil {
+			return nil, err
+		}
+		tests = dagger.Ref[*dagger.Container](dag, dagger.ID(id))
+	}
+	return &Compilation{Artifacts: dagger.Ref[*dagger.Directory](dag, dagger.ID(artifacts)), Published: published, Tests: tests, Cache: cache,
 		Hits: graph.HistoryHits, Actions: len(recipe.Actions)}, nil
 }
 
@@ -246,5 +288,5 @@ func (m *RustCompiler) tools() *dagger.Container {
 	return dag.Container().From("golang:1.26.6-alpine").
 		WithMountedDirectory("/src", source).WithWorkdir("/src").
 		WithEnvVariable("CGO_ENABLED", "0").
-		WithExec([]string{"go", "build", "-buildvcs=false", "-trimpath", "-ldflags=-s -w", "-o", "/out/", "./cmd/worker", "./cmd/wrapper"}, dagger.ContainerWithExecOpts{DisableDaggerInDagger: true})
+		WithExec([]string{"go", "build", "-buildvcs=false", "-trimpath", "-ldflags=-s -w", "-o", "/out/", "./cmd/worker", "./cmd/wrapper", "./cmd/test-recorder"}, dagger.ContainerWithExecOpts{DisableDaggerInDagger: true})
 }

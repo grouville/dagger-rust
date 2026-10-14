@@ -45,6 +45,9 @@ func NativePlanMatches(ctx context.Context, source *dagger.Directory, plan *mode
 	if plan == nil || plan.NativeConfigDigest == "" || plan.NativeSourcePaths == nil || !planOptionsMatch(plan, opts) {
 		return false, nil
 	}
+	if opts.Command == "build" && len(plan.Publications) == 0 {
+		return false, nil
+	}
 	digest, err := nativeConfigurationDirectory(source).Digest(ctx)
 	if err != nil {
 		return false, fmt.Errorf("hash native Cargo configuration: %w", err)
