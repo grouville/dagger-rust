@@ -59,3 +59,11 @@ advertised beta.16 and failed nested calls against the beta.17 engine.
 No upstream PR is open for this integration. Automatic plan/cache discovery,
 the ordinary check workflow, larger dependency graphs and physical cache
 retention/transfer costs still need work.
+
+This branch also enables the experimental engine's `Directory.digest(path)`
+API for package hashing. It requires that custom engine capability. The
+102-crate fixture preserves cache reuse across the original and direct
+hashing implementations. In five paired edits, shared-build median falls
+from 1.578 to 1.454 seconds, while leaf-build median rises from 1.006 to
+1.034 seconds. This is an isolated experiment, not selected for normal
+edited builds. Compiler results and incremental state remain native objects.

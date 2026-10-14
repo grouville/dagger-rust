@@ -144,6 +144,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	}
 	graph, err := replay.BuildNativeCached(ctx, query, &recipe, native, replay.BuildOptions{
 		BatchCompiler: core.Ref[*core.File](query, core.ID(runner)), BatchWorkers: workers,
+		SourceDigestPaths: true,
 	}, retained)
 	if err != nil {
 		return nil, err
