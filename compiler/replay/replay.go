@@ -58,6 +58,8 @@ type BuildOptions struct {
 	BatchWorkers       int
 	BatchNoPipelining  bool
 	BatchNoIncremental bool
+	// NativeInputs reuses reads made while validating this source and plan.
+	NativeInputs       *NativeInputs
 	automatic          *automaticInputs
 	nativeCache        *NativeCache
 	nativeConfigDigest string

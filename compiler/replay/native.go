@@ -41,13 +41,45 @@ func CaptureNative(ctx context.Context, client *dagger.Query, source *dagger.Dir
 // ordinary source files are compilation inputs, not a reason to recapture.
 // Conservatively recapture on any path addition/removal, including new targets
 // or build scripts that Cargo would otherwise discover outside the old graph.
-func NativePlanMatches(ctx context.Context, source *dagger.Directory, plan *model.Plan, opts CaptureOptions) (bool, error) {
+func NativePlanMatches(ctx context.Context, client *dagger.Query, source *dagger.Directory, plan *model.Plan, opts CaptureOptions) (bool, *NativeInputs, error) {
 	if plan == nil || plan.NativeConfigDigest == "" || plan.NativeSourcePaths == nil || !planOptionsMatch(plan, opts) {
-		return false, nil
+		return false, nil, nil
 	}
 	if opts.Command == "build" && len(plan.Publications) == 0 {
-		return false, nil
+		return false, nil, nil
 	}
+	if source == nil {
+		return false, nil, fmt.Errorf("native source directory is required")
+	}
+	id, err := source.ID(ctx)
+	if err != nil {
+		return false, nil, err
+	}
+	inputs := &NativeInputs{source: source, sourceID: id}
+	inputs.packages, err = packageDigestsWithInputs(ctx, client, id, plan.Packages, false, inputs)
+	if err != nil {
+		// A removed package can make the old projection fail. Preserve the
+		// normal recapture path before reporting a digest failure.
+		matches, checkErr := nativePlanMatchesFresh(ctx, source, plan)
+		if checkErr != nil {
+			return false, nil, checkErr
+		}
+		if !matches {
+			return false, nil, nil
+		}
+		return false, nil, err
+	}
+	if inputs.configuration != plan.NativeConfigDigest || !slices.Equal(inputs.paths, plan.NativeSourcePaths) {
+		return false, nil, nil
+	}
+	inputs.plan, err = historyDigest(plan)
+	if err != nil {
+		return false, nil, err
+	}
+	return true, inputs, nil
+}
+
+func nativePlanMatchesFresh(ctx context.Context, source *dagger.Directory, plan *model.Plan) (bool, error) {
 	digest, err := nativeConfigurationDirectory(source).Digest(ctx)
 	if err != nil {
 		return false, fmt.Errorf("hash native Cargo configuration: %w", err)
@@ -61,6 +93,25 @@ func NativePlanMatches(ctx context.Context, source *dagger.Directory, plan *mode
 	}
 	slices.Sort(paths)
 	return slices.Equal(paths, plan.NativeSourcePaths), nil
+}
+
+// NativeInputs carries inputs read from one immutable source during plan
+// validation. Its fields are private so callers cannot substitute digests.
+type NativeInputs struct {
+	source        *dagger.Directory
+	sourceID      dagger.ID
+	plan          string
+	configuration string
+	paths         []string
+	packages      map[string]string
+}
+
+func (inputs *NativeInputs) matches(source *dagger.Directory, plan *model.Plan) bool {
+	if inputs == nil || inputs.source != source {
+		return false
+	}
+	digest, err := historyDigest(plan)
+	return err == nil && inputs.plan == digest
 }
 
 func planOptionsMatch(plan *model.Plan, opts CaptureOptions) bool {
@@ -86,8 +137,13 @@ func BuildNativeAutomatic(ctx context.Context, client *dagger.Query, plan *model
 	}
 	var configuration Source
 	var err error
+	if !opts.NativeInputs.matches(source, plan) {
+		opts.NativeInputs = nil
+	}
 	if plan.NativeConfigDigest == "" {
 		configuration, err = nativeConfiguration(ctx, source)
+	} else if opts.NativeInputs != nil {
+		opts.nativeConfigDigest = opts.NativeInputs.configuration
 	} else {
 		opts.nativeConfigDigest, err = nativeConfigurationDirectory(source).Digest(ctx)
 		if err != nil {
@@ -115,7 +171,9 @@ func nativeConfiguration(ctx context.Context, source *dagger.Directory) (Source,
 }
 
 func nativeConfigurationDirectory(source *dagger.Directory) *dagger.Directory {
-	return source.Filter(dagger.DirectoryFilterOpts{Include: []string{
-		"**/Cargo.toml", "**/Cargo.lock", "**/rust-toolchain", "**/rust-toolchain.toml", "**/.cargo/**",
-	}})
+	return source.Filter(dagger.DirectoryFilterOpts{Include: nativeConfigurationPatterns})
+}
+
+var nativeConfigurationPatterns = []string{
+	"**/Cargo.toml", "**/Cargo.lock", "**/rust-toolchain", "**/rust-toolchain.toml", "**/.cargo/**",
 }

@@ -127,6 +127,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		}
 	}
 	resolvedImage := ""
+	var nativeInputs *replay.NativeInputs
 	if image != "" {
 		resolvedImage, err = dag.Container().From(image).ImageRef(ctx)
 		if err != nil {
@@ -139,10 +140,11 @@ func (m *RustCompiler) Compile(ctx context.Context,
 			return nil, fmt.Errorf("automatic plans require an image, a build/check command and --workspace --locked")
 		}
 		opts := replay.CaptureOptions{Image: resolvedImage, Command: command, CargoArgs: cargoFlags[2:]}
-		matches, err := replay.NativePlanMatches(ctx, native, &recipe, opts)
+		matches, inputs, err := replay.NativePlanMatches(ctx, query, native, &recipe, opts)
 		if err != nil {
 			return nil, err
 		}
+		nativeInputs = inputs
 		if !matches {
 			wrapper, err := m.tools().File("/out/wrapper").ID(ctx)
 			if err != nil {
@@ -203,6 +205,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	}
 	graph, err := replay.BuildNativeCached(ctx, query, &recipe, native, replay.BuildOptions{
 		BatchCompiler: core.Ref[*core.File](query, core.ID(runner)), BatchWorkers: workers, BatchNoIncremental: noIncremental,
+		NativeInputs: nativeInputs,
 	}, retained)
 	if err != nil {
 		return nil, err

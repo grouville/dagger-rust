@@ -15,8 +15,8 @@ import (
 	"unicode/utf8"
 
 	dagger "dagger.io/dagger/core"
-	"github.com/grouville/dagger-rust/compiler/model"
 	"github.com/dagger/querybuilder"
+	"github.com/grouville/dagger-rust/compiler/model"
 )
 
 type SourceFile struct {
@@ -187,10 +187,14 @@ func PackageDigests(ctx context.Context, client *dagger.Query, sourceID dagger.I
 }
 
 func packageDigests(ctx context.Context, client *dagger.Query, sourceID dagger.ID, packages []model.Package, directPaths bool) (map[string]string, error) {
+	return packageDigestsWithInputs(ctx, client, sourceID, packages, directPaths, nil)
+}
+
+func packageDigestsWithInputs(ctx context.Context, client *dagger.Query, sourceID dagger.ID, packages []model.Package, directPaths bool, inputs *NativeInputs) (map[string]string, error) {
 	projections := packageProjections(packages)
 	roots := sortedKeys(projections)
 	keys := make(map[string]string, len(roots))
-	if len(roots) == 0 {
+	if len(roots) == 0 && inputs == nil {
 		return keys, nil
 	}
 	fields := make([]string, len(roots))
@@ -216,10 +220,34 @@ func packageDigests(ctx context.Context, client *dagger.Query, sourceID dagger.I
 		WithoutDirectory *digestResult
 	}
 	var response map[string]json.RawMessage
+	if inputs != nil {
+		configuration, err := querybuilder.Query().SelectWithAlias("configuration", "filter").Arg("include", nativeConfigurationPatterns).Select("digest").Build(ctx)
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, strings.TrimSuffix(strings.TrimPrefix(configuration, "{"), "}"), "paths: glob(pattern: \"**/*\")")
+	}
 	err := client.QueryBuilder().Select("node").Arg("id", sourceID).InlineFragment("Directory").
 		SelectMultiple(fields...).Bind(&response).Execute(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if inputs != nil {
+		var configuration struct{ Digest string }
+		if err := json.Unmarshal(response["configuration"], &configuration); err != nil {
+			return nil, fmt.Errorf("read native Cargo configuration digest: %w", err)
+		}
+		if configuration.Digest == "" {
+			return nil, fmt.Errorf("missing native Cargo configuration digest")
+		}
+		inputs.configuration = configuration.Digest
+		if err := json.Unmarshal(response["paths"], &inputs.paths); err != nil {
+			return nil, fmt.Errorf("read native source paths: %w", err)
+		}
+		if inputs.paths == nil {
+			return nil, fmt.Errorf("missing native source paths")
+		}
+		sort.Strings(inputs.paths)
 	}
 	for i, root := range roots {
 		value := response[fmt.Sprintf("p%d", i)]

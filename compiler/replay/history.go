@@ -133,6 +133,9 @@ func targetRelative(filename string) string {
 // claiming to contain compiler results. Callers retain/transfer History as a
 // native Directory. A local ID file alone is neither portable nor a remote index.
 func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan, source Source, opts BuildOptions, previous *dagger.Directory) (*Graph, error) {
+	if opts.NativeInputs != nil && !opts.NativeInputs.matches(opts.SourceDirectory, plan) {
+		return nil, fmt.Errorf("native inputs belong to another source or plan")
+	}
 	if err := validateBuild(plan, source, opts); err != nil {
 		return nil, err
 	}
@@ -195,7 +198,10 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 	}
 	sources := source.packageSources(plan.Packages)
 	sourceKeys := map[string]string{}
-	if opts.SourceDirectory != nil {
+	if opts.NativeInputs != nil {
+		sourceKeys = opts.NativeInputs.packages
+		opts.SourceDirectory = dagger.Ref[*dagger.Directory](client, opts.NativeInputs.sourceID)
+	} else if opts.SourceDirectory != nil {
 		id, err := opts.SourceDirectory.ID(ctx)
 		if err != nil {
 			return nil, err
