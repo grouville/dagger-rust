@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"slices"
+	"time"
 
 	core "dagger.io/dagger/core"
 	"github.com/dagger/querybuilder"
@@ -87,6 +89,13 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	// +optional
 	image string,
 ) (*Compilation, error) {
+	started, checkpoint := time.Now(), time.Now()
+	stage := func(name string) {
+		now := time.Now()
+		fmt.Fprintf(os.Stderr, "native-compiler phase=%s milliseconds=%.3f elapsed=%.3f\n", name,
+			float64(now.Sub(checkpoint).Microseconds())/1000, float64(now.Sub(started).Microseconds())/1000)
+		checkpoint = now
+	}
 	if plan == nil {
 		return nil, fmt.Errorf("compiler plan is required")
 	}
@@ -98,6 +107,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	if err := json.Unmarshal([]byte(contents), &recipe); err != nil {
 		return nil, fmt.Errorf("decode compiler plan: %w", err)
 	}
+	stage("read-plan")
 	capturedCommand := recipe.CargoCommand
 	if capturedCommand == "" {
 		capturedCommand = "build"
@@ -117,6 +127,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 			return nil, fmt.Errorf("toolchain image differs from the compiler plan")
 		}
 	}
+	stage("validate-image")
 	query := nativeQuery()
 	native, err := nativeDirectory(ctx, query, source)
 	if err != nil {
@@ -138,20 +149,24 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	} else if len(previousTokens) != 0 || len(previousSnapshots) != 0 {
 		return nil, fmt.Errorf("compiler cache directories require a manifest")
 	}
+	stage("native-inputs")
 	runner, err := m.tools().File("/out/worker").ID(ctx)
 	if err != nil {
 		return nil, err
 	}
+	stage("worker-handle")
 	graph, err := replay.BuildNativeCached(ctx, query, &recipe, native, replay.BuildOptions{
 		BatchCompiler: core.Ref[*core.File](query, core.ID(runner)), BatchWorkers: workers,
 	}, retained)
 	if err != nil {
 		return nil, err
 	}
+	stage("construct-graph")
 	ready, err := graph.Artifacts.Sync(ctx)
 	if err != nil {
 		return nil, err
 	}
+	stage("execute-graph")
 	artifacts, err := ready.ID(ctx)
 	if err != nil {
 		return nil, err
@@ -165,6 +180,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		cache.Tokens = append(cache.Tokens, batch.ID)
 		cache.Snapshots = append(cache.Snapshots, dagger.Ref[*dagger.Directory](dag, dagger.ID(id)))
 	}
+	stage("return-native-fields")
 	return &Compilation{Artifacts: dagger.Ref[*dagger.Directory](dag, dagger.ID(artifacts)), Cache: cache,
 		Hits: graph.HistoryHits, Actions: len(recipe.Actions)}, nil
 }
