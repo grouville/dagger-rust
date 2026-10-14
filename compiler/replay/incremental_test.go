@@ -24,6 +24,7 @@ func TestIncrementalSeedCompatibility(t *testing.T) {
 	plan.Actions[0].Inputs = []string{"/src/b/new-module.rs"}
 	plan.BaselineDigests = map[string]string{"/target/liba.rlib": "changed"}
 	plan.NativeConfigDigest = "native configuration validation metadata"
+	plan.NativeSourcePaths = []string{"new/source.rs"}
 	if err := seed.Validate(plan, "a"); err != nil {
 		t.Fatal(err)
 	}

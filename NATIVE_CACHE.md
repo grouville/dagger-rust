@@ -1,17 +1,36 @@
 # Experimental native compiler cache
 
+This branch selects compiler plans automatically. `nativeCheck` captures the
+first plan and retains it as `cache.plan`, a native File. Passing the previous
+cache reuses that plan for ordinary source edits. Configuration, source-path,
+Cargo-option and image changes trigger recapture. An explicit `compilerPlan`
+keeps strict validation.
+
+Set `nativeCache = true` with `locked = true` to use this backend for normal
+checks without supplying a plan. The ordinary `dagger check rust:check` command
+passes in the fixture. Previous cache discovery is not automatic yet: callers
+must retain `nativeCheck.cache` or configure `compilerCache` to preserve rustc
+incremental state across source edits. The default remains the Cargo backend.
+
+The integration driver accepts `-automatic-plan`; its writer verifies plan
+reuse, configuration recapture, new binary discovery and unsupported build-script
+rejection. Its reader restores the plan with native cache directories. The
+`check` stage keeps the plan handle and avoids uploading plan JSON on each edit.
+Fresh 102-action leaf/shared commands measure 0.939/1.431 s versus Cargo's
+0.086/0.515 s. These are workflow measurements, not a paired speedup claim.
+
 The `compiler` dependency contains the tested Rust replay backend, extracted
 from the Dagger engine experiment. It shares the module's existing API
 connection. Compiler outputs and rustc incremental state are immutable native
 directories; the cache consists of a manifest, batch tokens and Directory
 fields. No Cargo compiler cache volume is used in this path.
 
-`captureCheckPlan` records a locked, path-only workspace's Cargo check graph.
-Pass that File as `compilerPlan` and pass the previous `nativeCheck.cache` to
-the next `nativeCheck`'s `previous` argument. This keeps the Rust constructor
-stable across edits. `compilerCache` remains available for the normal `check`
-entrypoint, which uses this backend when a plan is configured. The normal
-Cargo backend remains the default while automatic plan/cache discovery and
+`captureCheckPlan` remains available for an explicit, strict plan. Automatic
+checks retain it inside `nativeCheck.cache`; pass that cache to the next
+`nativeCheck`'s `previous` argument. This keeps the Rust constructor stable
+across edits. `compilerCache` supplies state to the normal `check` entrypoint
+when the native backend is selected. The normal Cargo backend remains the
+default while automatic previous-cache discovery and
 support for registry dependencies, build scripts, procedural macros and tests
 are implemented. Published artifacts retain their existing reproducibility
 policy.
@@ -56,7 +75,7 @@ beta.17 through a version replacement because replay requires the separate
 generator also had to be built from the engine's source. Its old embedded CLI
 advertised beta.16 and failed nested calls against the beta.17 engine.
 
-No upstream PR is open for this integration. Automatic plan/cache discovery,
+No upstream PR is open for this integration. Automatic previous-cache discovery,
 the ordinary check workflow, larger dependency graphs and physical cache
 retention/transfer costs still need work.
 

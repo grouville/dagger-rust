@@ -18,6 +18,7 @@ type RustCompiler struct{}
 
 // Cache retains compiler results and incremental state as native Dagger fields.
 type Cache struct {
+	Plan      *dagger.File
 	Manifest  string
 	Tokens    []string
 	Snapshots []*dagger.Directory
@@ -69,6 +70,9 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	source *dagger.Directory,
 	// +optional
 	plan *dagger.File,
+	// Capture or refresh the plan from the current Cargo inputs.
+	// +optional
+	automaticPlan bool,
 	// +optional
 	previousManifest string,
 	// +optional
@@ -87,16 +91,61 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	// +optional
 	image string,
 ) (*Compilation, error) {
-	if plan == nil {
+	if plan == nil && !automaticPlan {
 		return nil, fmt.Errorf("compiler plan is required")
 	}
-	contents, err := plan.Contents(ctx)
+	query := nativeQuery()
+	native, err := nativeDirectory(ctx, query, source)
 	if err != nil {
 		return nil, err
 	}
 	var recipe model.Plan
-	if err := json.Unmarshal([]byte(contents), &recipe); err != nil {
-		return nil, fmt.Errorf("decode compiler plan: %w", err)
+	if plan != nil {
+		contents, readErr := plan.Contents(ctx)
+		if readErr == nil {
+			readErr = json.Unmarshal([]byte(contents), &recipe)
+		}
+		if readErr != nil && !automaticPlan {
+			return nil, fmt.Errorf("read compiler plan: %w", readErr)
+		}
+		if readErr != nil {
+			recipe = model.Plan{}
+		}
+	}
+	resolvedImage := ""
+	if image != "" {
+		resolvedImage, err = dag.Container().From(image).ImageRef(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if automaticPlan {
+		if resolvedImage == "" || (command != "check" && command != "build") || len(cargoFlags) < 2 ||
+			!slices.Equal(cargoFlags[:2], []string{"--workspace", "--locked"}) {
+			return nil, fmt.Errorf("automatic plans require an image, a build/check command and --workspace --locked")
+		}
+		opts := replay.CaptureOptions{Image: resolvedImage, Command: command, CargoArgs: cargoFlags[2:]}
+		matches, err := replay.NativePlanMatches(ctx, native, &recipe, opts)
+		if err != nil {
+			return nil, err
+		}
+		if !matches {
+			wrapper, err := m.tools().File("/out/wrapper").ID(ctx)
+			if err != nil {
+				return nil, err
+			}
+			opts.Wrapper = core.Ref[*core.File](query, core.ID(wrapper))
+			captured, err := replay.CaptureNative(ctx, query, native, opts)
+			if err != nil {
+				return nil, err
+			}
+			recipe = *captured
+			contents, err := json.Marshal(captured)
+			if err != nil {
+				return nil, err
+			}
+			plan = dag.File("plan.json", string(contents))
+		}
 	}
 	capturedCommand := recipe.CargoCommand
 	if capturedCommand == "" {
@@ -108,19 +157,8 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	if cargoFlags != nil && !slices.Equal(cargoFlags, append([]string{"--workspace", "--locked"}, recipe.CargoArgs...)) {
 		return nil, fmt.Errorf("Cargo flags differ from the compiler plan")
 	}
-	if image != "" {
-		resolved, err := dag.Container().From(image).ImageRef(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if resolved != recipe.Image {
-			return nil, fmt.Errorf("toolchain image differs from the compiler plan")
-		}
-	}
-	query := nativeQuery()
-	native, err := nativeDirectory(ctx, query, source)
-	if err != nil {
-		return nil, err
+	if resolvedImage != "" && resolvedImage != recipe.Image {
+		return nil, fmt.Errorf("toolchain image differs from the compiler plan")
 	}
 	var retained *replay.NativeCache
 	if previousManifest != "" {
@@ -156,7 +194,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	cache := &Cache{Manifest: graph.Cache.Manifest}
+	cache := &Cache{Plan: plan, Manifest: graph.Cache.Manifest}
 	for _, batch := range graph.Cache.Batches {
 		id, err := batch.Snapshot.ID(ctx)
 		if err != nil {

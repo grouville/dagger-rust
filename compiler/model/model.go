@@ -22,6 +22,7 @@ type Plan struct {
 	RustcVersion       string            `json:"rustc_version"`
 	ConfigDigest       string            `json:"config_digest"`
 	NativeConfigDigest string            `json:"native_config_digest,omitempty"`
+	NativeSourcePaths  []string          `json:"native_source_paths,omitempty"`
 	CargoArgs          []string          `json:"cargo_args"`
 	CargoCommand       string            `json:"cargo_command,omitempty"`
 	Environment        map[string]string `json:"environment"`

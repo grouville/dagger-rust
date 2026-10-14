@@ -78,6 +78,8 @@ func (r *RustCompiler) Capture(source *Directory, opts ...RustCompilerCaptureOpt
 // RustCompilerCompileOpts contains options for RustCompiler.Compile
 type RustCompilerCompileOpts struct {
 	Plan *File
+	// Capture or refresh the plan from the current Cargo inputs.
+	AutomaticPlan bool
 
 	PreviousManifest string
 
@@ -104,6 +106,10 @@ func (r *RustCompiler) Compile(source *Directory, opts ...RustCompilerCompileOpt
 		// `plan` optional argument
 		if !querybuilder.IsZeroValue(opts[i].Plan) {
 			q = q.Arg("plan", opts[i].Plan)
+		}
+		// `automaticPlan` optional argument
+		if !querybuilder.IsZeroValue(opts[i].AutomaticPlan) {
+			q = q.Arg("automaticPlan", opts[i].AutomaticPlan)
 		}
 		// `previousManifest` optional argument
 		if !querybuilder.IsZeroValue(opts[i].PreviousManifest) {
@@ -283,6 +289,15 @@ func (r *RustCompilerCache) Manifest(ctx context.Context) (string, error) {
 
 	q = q.Bind(&response)
 	return response, q.Execute(ctx)
+}
+
+func (r *RustCompilerCache) Plan() *File {
+	q := r.query.Select("plan")
+
+	return &File{
+		query:     q,
+		refetchID: r.refetchID,
+	}
 }
 
 func (r *RustCompilerCache) Snapshots(ctx context.Context) ([]Directory, error) {

@@ -24,6 +24,7 @@ type compilation struct {
 	Artifacts struct{ ID core.ID }
 	Cache     struct {
 		ID        core.ID
+		Plan      struct{ ID core.ID }
 		Manifest  string
 		Tokens    []string
 		Snapshots []struct{ ID core.ID }
@@ -37,6 +38,7 @@ type transfer struct {
 	Edit        string
 	SnapshotIDs []core.ID `json:",omitempty"`
 	CacheID     core.ID   `json:",omitempty"`
+	PlanID      core.ID   `json:",omitempty"`
 }
 
 func main() {
@@ -48,6 +50,7 @@ func main() {
 
 func run() error {
 	sourcePath := flag.String("source", "", "Cargo workspace used by this integration fixture")
+	automaticPlan := flag.Bool("automatic-plan", false, "select plans from the native cache and recapture when Cargo inputs change")
 	cacheInConstructor := flag.Bool("cache-in-constructor", false, "use the earlier compilerCache constructor input for comparison")
 	restoreCacheFields := flag.Bool("restore-cache-fields", false, "reconstruct the cache fields on each command for comparison")
 	expectedActions := flag.Int("expected-actions", -1, "expected compiler action count for the check stage; negative disables the assertion")
@@ -99,7 +102,10 @@ func run() error {
 		if err != nil {
 			return nil, err
 		}
-		root := rust.Arg("compilerPlan", plan)
+		root := rust
+		if !*automaticPlan {
+			root = root.Arg("compilerPlan", plan)
+		}
 		if previous != "" && *cacheInConstructor {
 			root = root.Arg("compilerCache", previous)
 		}
@@ -108,8 +114,11 @@ func run() error {
 			check = check.Arg("previous", previous)
 		}
 		var result compilation
-		err = check.
-			SelectMultiple("id", "hits", "actions", "artifacts { id }", "cache { id manifest tokens snapshots { id } }").Bind(&result).Execute(ctx)
+		cacheFields := "cache { id manifest tokens snapshots { id } }"
+		if *automaticPlan {
+			cacheFields = "cache { id plan { id } manifest tokens snapshots { id } }"
+		}
+		err = check.SelectMultiple("id", "hits", "actions", "artifacts { id }", cacheFields).Bind(&result).Execute(ctx)
 		return &result, err
 	}
 	if stage == "check" {
@@ -126,7 +135,7 @@ func run() error {
 			return err
 		}
 		var planID, previous core.ID
-		if stored.Plan == "" {
+		if stored.Plan == "" && !*automaticPlan {
 			if err := rust.Select("captureCheckPlan").Arg("source", sourceID).Select("id").Bind(&planID).Execute(ctx); err != nil {
 				return err
 			}
@@ -134,10 +143,12 @@ func run() error {
 			if err != nil {
 				return err
 			}
-		} else {
-			planID, err = query.Directory().WithNewFile("plan.json", stored.Plan).File("plan.json").ID(ctx)
-			if err != nil {
-				return err
+		} else if stored.Plan != "" {
+			if !*automaticPlan || stored.CacheID == "" || *restoreCacheFields {
+				planID, err = query.Directory().WithNewFile("plan.json", stored.Plan).File("plan.json").ID(ctx)
+				if err != nil {
+					return err
+				}
 			}
 			if stored.CacheID != "" && !*restoreCacheFields {
 				previous = stored.CacheID
@@ -149,7 +160,11 @@ func run() error {
 				for _, id := range stored.SnapshotIDs {
 					snapshots = append(snapshots, core.Ref[*core.Directory](query, id))
 				}
-				if err := rust.Select("restoreCompilerCache").Arg("manifest", stored.Manifest).Arg("tokens", stored.Tokens).Arg("snapshots", snapshots).Select("id").Bind(&previous).Execute(ctx); err != nil {
+				restore := rust.Select("restoreCompilerCache").Arg("manifest", stored.Manifest).Arg("tokens", stored.Tokens).Arg("snapshots", snapshots)
+				if *automaticPlan {
+					restore = restore.Arg("plan", planID)
+				}
+				if err := restore.Select("id").Bind(&previous).Execute(ctx); err != nil {
 					return err
 				}
 			}
@@ -163,6 +178,13 @@ func run() error {
 		}
 		if *expectedHits >= 0 && result.Hits != *expectedHits {
 			return fmt.Errorf("expected %d reused compiler actions, got %d", *expectedHits, result.Hits)
+		}
+		if *automaticPlan && result.Cache.Plan.ID != stored.PlanID {
+			stored.Plan, err = core.Ref[*core.File](query, result.Cache.Plan.ID).Contents(ctx)
+			if err != nil {
+				return err
+			}
+			stored.PlanID = result.Cache.Plan.ID
 		}
 		stored.Manifest, stored.Tokens, stored.SnapshotIDs = result.Cache.Manifest, result.Cache.Tokens, nil
 		stored.CacheID = result.Cache.ID
@@ -184,8 +206,10 @@ func run() error {
 	}
 	if stage == "writer" {
 		var planID core.ID
-		if err := rust.Select("captureCheckPlan").Arg("source", sourceID).Select("id").Bind(&planID).Execute(ctx); err != nil {
-			return err
+		if !*automaticPlan {
+			if err := rust.Select("captureCheckPlan").Arg("source", sourceID).Select("id").Bind(&planID).Execute(ctx); err != nil {
+				return err
+			}
 		}
 		cold, err := build(source, planID, "")
 		if err != nil {
@@ -195,7 +219,13 @@ func run() error {
 			return fmt.Errorf("cold result: %+v", cold)
 		}
 		var checked bool
-		if err := rust.Arg("compilerPlan", planID).Arg("compilerCache", cold.Cache.ID).
+		checkRoot := rust.Arg("compilerCache", cold.Cache.ID)
+		if *automaticPlan {
+			checkRoot = checkRoot.Arg("nativeCache", true)
+		} else {
+			checkRoot = checkRoot.Arg("compilerPlan", planID)
+		}
+		if err := checkRoot.
 			Select("check").Arg("source", sourceID).Select("pass").Bind(&checked).Execute(ctx); err != nil {
 			return fmt.Errorf("normal check entrypoint: %w", err)
 		}
@@ -225,35 +255,44 @@ func run() error {
 		if reverted.Hits != 4 {
 			return fmt.Errorf("reversion reused %d/4", reverted.Hits)
 		}
-		for _, filename := range []string{"Cargo.toml", "Cargo.lock", ".cargo/config.toml", "rust-toolchain.toml"} {
-			contents := "# added configuration\n"
-			if filename == "Cargo.toml" || filename == "Cargo.lock" {
-				original, err := source.File(filename).Contents(ctx)
-				if err != nil {
-					return err
+		if *automaticPlan {
+			if err := verifyAutomaticPlan(ctx, query, source, cold, changed, reverted, build); err != nil {
+				return err
+			}
+		} else {
+			for _, filename := range []string{"Cargo.toml", "Cargo.lock", ".cargo/config.toml", "rust-toolchain.toml"} {
+				contents := "# added configuration\n"
+				if filename == "Cargo.toml" || filename == "Cargo.lock" {
+					original, err := source.File(filename).Contents(ctx)
+					if err != nil {
+						return err
+					}
+					contents = original + "\n# changed configuration\n"
 				}
-				contents = original + "\n# changed configuration\n"
+				_, err := build(source.WithNewFile(filename, contents), planID, reverted.Cache.ID)
+				if err == nil || !strings.Contains(err.Error(), "build configuration changed; recapture") {
+					return fmt.Errorf("configuration change %s was not rejected: %v", filename, err)
+				}
 			}
-			_, err := build(source.WithNewFile(filename, contents), planID, reverted.Cache.ID)
+			modeChange := source.WithFile("Cargo.toml", source.File("Cargo.toml"), core.DirectoryWithFileOpts{Permissions: 0600})
+			stat, err := modeChange.Stat(ctx, "Cargo.toml")
+			if err != nil {
+				return err
+			}
+			permissions, err := stat.Permissions(ctx)
+			if err != nil || permissions != 0600 {
+				return fmt.Errorf("configuration mode fixture has permissions %o: %v", permissions, err)
+			}
+			_, err = build(modeChange, planID, reverted.Cache.ID)
 			if err == nil || !strings.Contains(err.Error(), "build configuration changed; recapture") {
-				return fmt.Errorf("configuration change %s was not rejected: %v", filename, err)
+				return fmt.Errorf("configuration permission change was not rejected: %v", err)
 			}
-		}
-		modeChange := source.WithFile("Cargo.toml", source.File("Cargo.toml"), core.DirectoryWithFileOpts{Permissions: 0600})
-		stat, err := modeChange.Stat(ctx, "Cargo.toml")
-		if err != nil {
-			return err
-		}
-		permissions, err := stat.Permissions(ctx)
-		if err != nil || permissions != 0600 {
-			return fmt.Errorf("configuration mode fixture has permissions %o: %v", permissions, err)
-		}
-		_, err = build(modeChange, planID, reverted.Cache.ID)
-		if err == nil || !strings.Contains(err.Error(), "build configuration changed; recapture") {
-			return fmt.Errorf("configuration permission change was not rejected: %v", err)
 		}
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
+		}
+		if *automaticPlan {
+			planID = changed.Cache.Plan.ID
 		}
 		plan, err := core.Ref[*core.File](query, planID).Contents(ctx)
 		if err != nil {
@@ -290,11 +329,15 @@ func run() error {
 		snapshots = append(snapshots, query.Host().Directory(filepath.Join(dir, fmt.Sprint(i))))
 	}
 	var previous core.ID
-	if err := rust.Select("restoreCompilerCache").Arg("manifest", stored.Manifest).Arg("tokens", stored.Tokens).Arg("snapshots", snapshots).Select("id").Bind(&previous).Execute(ctx); err != nil {
-		return err
-	}
 	planID, err := query.Directory().WithNewFile("plan.json", stored.Plan).File("plan.json").ID(ctx)
 	if err != nil {
+		return err
+	}
+	restore := rust.Select("restoreCompilerCache").Arg("manifest", stored.Manifest).Arg("tokens", stored.Tokens).Arg("snapshots", snapshots)
+	if *automaticPlan {
+		restore = restore.Arg("plan", planID)
+	}
+	if err := restore.Select("id").Bind(&previous).Execute(ctx); err != nil {
 		return err
 	}
 	edit := source.WithNewFile("app/src/part_0000.rs", stored.Edit)
@@ -314,5 +357,61 @@ func run() error {
 		return fmt.Errorf("fresh-engine edit reused %d/4", changed.Hits)
 	}
 	fmt.Println("PASS: actual Rust module transferred 4/4 hits and new edit with 3/4 hits")
+	return nil
+}
+
+func verifyAutomaticPlan(ctx context.Context, query *core.Query, source *core.Directory, cold, edited, reverted *compilation,
+	build func(*core.Directory, core.ID, core.ID) (*compilation, error),
+) error {
+	readPlan := func(result *compilation) (string, error) {
+		if result.Cache.Plan.ID == "" {
+			return "", fmt.Errorf("automatic compilation did not retain its plan")
+		}
+		return core.Ref[*core.File](query, result.Cache.Plan.ID).Contents(ctx)
+	}
+	original, err := readPlan(cold)
+	if err != nil {
+		return err
+	}
+	for _, result := range []*compilation{edited, reverted} {
+		plan, err := readPlan(result)
+		if err != nil {
+			return err
+		}
+		if plan != original {
+			return fmt.Errorf("ordinary source edit recaptured the compiler plan")
+		}
+	}
+	manifest, err := source.File("Cargo.toml").Contents(ctx)
+	if err != nil {
+		return err
+	}
+	configured, err := build(source.WithNewFile("Cargo.toml", manifest+"\n# automatic plan recapture\n"), "", reverted.Cache.ID)
+	if err != nil {
+		return fmt.Errorf("automatic configuration recapture: %w", err)
+	}
+	updated, err := readPlan(configured)
+	if err != nil {
+		return err
+	}
+	if configured.Actions != 4 || configured.Hits != 0 || updated == original {
+		return fmt.Errorf("configuration recapture returned %d actions, %d hits, plan changed=%t", configured.Actions, configured.Hits, updated != original)
+	}
+	target, err := build(source.WithNewFile("app/src/bin/extra.rs", "fn main() {}\n"), "", reverted.Cache.ID)
+	if err != nil {
+		return fmt.Errorf("automatic target discovery: %w", err)
+	}
+	if target.Actions != 5 {
+		return fmt.Errorf("new binary was not discovered: %d actions", target.Actions)
+	}
+	_, err = build(source.WithNewFile("base/build.rs", "fn main() {}\n"), "", reverted.Cache.ID)
+	if err == nil || !strings.Contains(err.Error(), "build scripts and procedural macros") {
+		return fmt.Errorf("new unsupported build script was not rejected: %v", err)
+	}
+	_, err = build(source.WithNewFile("Cargo.toml", "invalid Cargo configuration"), "", reverted.Cache.ID)
+	if err == nil {
+		return fmt.Errorf("invalid Cargo configuration passed automatic recapture")
+	}
+	fmt.Println("PASS: automatic plan retained across edits, refreshed for configuration and new target, and rejected new build scripts and invalid configuration")
 	return nil
 }
