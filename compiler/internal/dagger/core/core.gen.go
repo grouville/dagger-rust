@@ -6869,8 +6869,20 @@ func (r *Directory) Changes(from *Directory) *Changeset {
 	}
 }
 
-func (r *Directory) Checkpoint() *Directory {
+// DirectoryCheckpointOpts contains options for Directory.Checkpoint
+type DirectoryCheckpointOpts struct {
+	// Use the committed snapshot identity rather than hashing its contents. This preserves ownership while giving up deduplication between distinct snapshots with identical contents.
+	SnapshotIdentity bool
+}
+
+func (r *Directory) Checkpoint(opts ...DirectoryCheckpointOpts) *Directory {
 	q := r.query.Select("checkpoint")
+	for i := len(opts) - 1; i >= 0; i-- {
+		// `snapshotIdentity` optional argument
+		if !querybuilder.IsZeroValue(opts[i].SnapshotIdentity) {
+			q = q.Arg("snapshotIdentity", opts[i].SnapshotIdentity)
+		}
+	}
 
 	return &Directory{
 		query:     q,

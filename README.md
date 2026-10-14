@@ -83,6 +83,18 @@ this reduces graph preparation. The performance target remains open. Native
 state survives clean engine restart, and explicit snapshot transfer executes
 correctly on a second engine.
 
+The `experiment/native-checkpoint-snapshot-key` branch additionally requires
+an engine with `Directory.checkpoint(snapshotIdentity: true)`. Retaining a
+completed immutable compiler snapshot uses its committed identity, path and
+platform instead of reading its contents again. This keeps independent
+snapshot ownership and native transfer; separately produced equal-content
+snapshots are not deduplicated at checkpoint creation.
+
+Eight paired shared edits in a 102-action workspace take 1.385 s median with
+this mode, versus 1.443 s with content checkpointing. All eight pairs improve.
+Leaf edits show no established gain (0.869 s versus 0.862 s). The local host had
+some contention, and the Cargo +0.5-second target remains unfinished.
+
 The supported subset is locked Linux/amd64 workspaces with path dependencies,
 no build scripts or procedural macros, and no extra system packages. Registry
 dependencies and broader Cargo compatibility remain work in progress. Formatting

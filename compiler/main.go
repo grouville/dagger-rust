@@ -229,7 +229,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 			} `json:"checkpoint"`
 		}
 		err = querybuilder.Query().Client(dag.GraphQLClient()).Select("node").Arg("id", id).
-			SelectMultiple("... on Directory { checkpoint { id } }").Bind(&saved).Execute(ctx)
+			SelectMultiple("... on Directory { checkpoint(snapshotIdentity: true) { id } }").Bind(&saved).Execute(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("checkpoint native compiler state: %w", err)
 		}

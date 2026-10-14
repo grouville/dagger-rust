@@ -340,6 +340,9 @@ type DirectoryAsModuleSourceOpts = core.DirectoryAsModuleSourceOpts
 // DirectoryAsWorkspaceOpts contains options for Directory.AsWorkspace
 type DirectoryAsWorkspaceOpts = core.DirectoryAsWorkspaceOpts
 
+// DirectoryCheckpointOpts contains options for Directory.Checkpoint
+type DirectoryCheckpointOpts = core.DirectoryCheckpointOpts
+
 // DirectoryDigestOpts contains options for Directory.Digest
 type DirectoryDigestOpts = core.DirectoryDigestOpts
 
