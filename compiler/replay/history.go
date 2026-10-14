@@ -18,7 +18,11 @@ import (
 
 const historyVersion = 1
 const historyEntriesPerAction = 4
+
+// Accept histories written by the eight-build experiment. The current policy
+// can compact them sooner without discarding exact compiler results.
 const maxBatchCopyOnWriteDepth = 8
+const batchCopyOnWriteInterval = historyEntriesPerAction
 
 // HistoryReference is only a local pointer. The referenced Directory contains
 // the complete, portable history: metadata, compiler outputs and rustc state.

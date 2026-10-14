@@ -62,7 +62,7 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 	if opts.automatic.batchBase != nil {
 		state = opts.automatic.batchBase
 		depth = opts.automatic.batchDepth
-		if depth == maxBatchCopyOnWriteDepth {
+		if depth >= batchCopyOnWriteInterval {
 			// Detach physical ancestry periodically. A checkpoint detaches the
 			// Dagger recipe, but its filesystem still has snapshot parents.
 			state = client.Directory().WithDirectory(".", state)
