@@ -195,28 +195,38 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		return nil, err
 	}
 	cache := &Cache{Plan: plan, Manifest: graph.Cache.Manifest}
-	for _, batch := range graph.Cache.Batches {
+	selections := make([]string, len(graph.Cache.Batches))
+	for i, batch := range graph.Cache.Batches {
 		id, err := batch.Snapshot.ID(ctx)
 		if err != nil {
 			return nil, err
 		}
-		// Keep a closed native snapshot value, rather than retaining every
-		// previous seeded compilation through its producing recipe.
-		var saved struct {
-			Checkpoint struct {
-				ID core.ID `json:"id"`
-			} `json:"checkpoint"`
+		encoded, err := querybuilder.MarshalGQL(ctx, id)
+		if err != nil {
+			return nil, err
 		}
-		err = querybuilder.Query().Client(dag.GraphQLClient()).Select("node").Arg("id", id).
-			SelectMultiple("... on Directory { checkpoint { id } }").Bind(&saved).Execute(ctx)
+		selections[i] = fmt.Sprintf("batch%d: node(id: %s) { ... on Directory { checkpoint { id } } }", i, encoded)
+	}
+	// Keep closed native snapshots without retaining their producing recipes.
+	// Publish all batches in one request, preserving the manifest's ordering.
+	var saved map[string]struct {
+		Checkpoint struct {
+			ID core.ID `json:"id"`
+		} `json:"checkpoint"`
+	}
+	if len(selections) != 0 {
+		err = querybuilder.Query().Client(dag.GraphQLClient()).SelectMultiple(selections...).Bind(&saved).Execute(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("checkpoint native compiler state: %w", err)
 		}
-		if saved.Checkpoint.ID == "" {
+	}
+	for i, batch := range graph.Cache.Batches {
+		id := saved[fmt.Sprintf("batch%d", i)].Checkpoint.ID
+		if id == "" {
 			return nil, fmt.Errorf("checkpoint native compiler state returned no directory")
 		}
 		cache.Tokens = append(cache.Tokens, batch.ID)
-		cache.Snapshots = append(cache.Snapshots, dagger.Ref[*dagger.Directory](dag, dagger.ID(saved.Checkpoint.ID)))
+		cache.Snapshots = append(cache.Snapshots, dagger.Ref[*dagger.Directory](dag, dagger.ID(id)))
 	}
 	return &Compilation{Artifacts: dagger.Ref[*dagger.Directory](dag, dagger.ID(artifacts)), Cache: cache,
 		Hits: graph.HistoryHits, Actions: len(recipe.Actions)}, nil
