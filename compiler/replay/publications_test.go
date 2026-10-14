@@ -45,3 +45,22 @@ func TestBuildPublicationRejectsUncapturedAndUnsafeOutputs(t *testing.T) {
 		t.Fatal("accepted duplicate final paths")
 	}
 }
+
+func TestTestBinaryPublicationSelectsNormalExecutable(t *testing.T) {
+	metadata := `{"workspace_members":["app"]}`
+	actions := []model.Action{
+		{ID: "normal", Crate: "app", PackageRoot: "/src/app", Args: []string{"--crate-type", "bin"}, Inputs: []string{"/src/app/src/main.rs"}, Outputs: []string{"/target/debug/deps/app-normal"}},
+		{ID: "test", Crate: "app", PackageRoot: "/src/app", Args: []string{"--test"}, Inputs: []string{"/src/app/src/main.rs"}, Outputs: []string{"/target/debug/deps/app-test"}},
+	}
+	messages := `{"reason":"compiler-artifact","package_id":"app","manifest_path":"/src/app/Cargo.toml","target":{"src_path":"/src/app/src/main.rs","name":"app","kind":["bin"]},"profile":{"test":false},"filenames":["/target/debug/app"]}
+{"reason":"compiler-artifact","package_id":"app","manifest_path":"/src/app/Cargo.toml","target":{"src_path":"/src/app/src/main.rs","name":"app","kind":["bin"]},"profile":{"test":true},"filenames":["/target/debug/deps/app-test"]}
+{"reason":"build-finished","success":true}`
+	got, err := buildPublications(metadata, messages, actions, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []model.Publication{{Output: "/target/debug/deps/app-normal", Path: "debug/app"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v, want %#v", got, want)
+	}
+}

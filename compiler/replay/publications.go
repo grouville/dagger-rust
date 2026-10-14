@@ -49,6 +49,9 @@ func buildPublications(metadataJSON, messages string, actions []model.Action, al
 					Name   string   `json:"name"`
 				} `json:"target"`
 				Filenames []string `json:"filenames"`
+				Profile   struct {
+					Test bool `json:"test"`
+				} `json:"profile"`
 			}
 			if err := json.Unmarshal(scanner.Bytes(), &artifact); err != nil {
 				return nil, fmt.Errorf("read Cargo artifact: %w", err)
@@ -66,7 +69,8 @@ func buildPublications(metadataJSON, messages string, actions []model.Action, al
 				}
 				output := ""
 				for _, action := range actions {
-					if action.PackageRoot != path.Dir(artifact.Manifest) || action.Crate != strings.ReplaceAll(artifact.Target.Name, "-", "_") || !slices.Contains(action.Inputs, artifact.Target.Source) {
+					if action.PackageRoot != path.Dir(artifact.Manifest) || action.Crate != strings.ReplaceAll(artifact.Target.Name, "-", "_") || !slices.Contains(action.Inputs, artifact.Target.Source) ||
+						slices.Contains(action.Args, "--test") != artifact.Profile.Test {
 						continue
 					}
 					for _, candidate := range action.Outputs {
