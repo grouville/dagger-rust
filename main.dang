@@ -207,7 +207,7 @@ type Rust {
     action("check", source, ["cargo", "check"] + cargoFlags)
   }
 
-  let nativeCheckResult(source: Directory!, previous: NativeCache): NativeCompilation! {
+  let compileNativeCheck(source: Directory!, previous: NativeCache): Dagger.RustCompilerCompilation! {
     assert("The experimental compiler backend requires a locked workspace and no extra packages") {
       locked and extraPackages.isEmpty
     }
@@ -234,14 +234,20 @@ type Rust {
     let selectedPlan = compilerPlan ?? previousFields.plan
     let compiled = rustCompiler.compile(source, plan: selectedPlan, automaticPlan: compilerPlan == null,
       previousManifest: previousFields.manifest, previousTokens: previousFields.tokens, previousSnapshots: previousFields.snapshots,
-      workers: 8, command: "check", cargoFlags: cargoFlags, image: image).{{
+      workers: 8, command: "check", cargoFlags: cargoFlags, image: image)
+    let saved = compiled.cache.{{id}}
+    assert("Failed to retain the native compiler cache") {
+      Dagger.saveNativeCacheHint(key: hintKey, value: saved.id!)
+    }
+    compiled
+  }
+
+  let nativeCheckResult(source: Directory!, previous: NativeCache): NativeCompilation! {
+    let compiled = compileNativeCheck(source, previous).{{
         artifacts.{{id}},
         cache.{{id, plan.{{id}}, manifest, tokens, snapshots.{{id}}}},
         hits, actions
       }}
-    assert("Failed to retain the native compiler cache") {
-      Dagger.saveNativeCacheHint(key: hintKey, value: compiled.cache.id!)
-    }
     NativeCompilation(
       artifacts: node(compiled.artifacts.id!).{{... on Directory!}},
       cache: NativeCache(
@@ -363,7 +369,7 @@ type Rust {
     if (compilerPlan == null and nativeCache == false) {
       checkResult(source).sync
     } else {
-      nativeCheckResult(source, null).artifacts.sync
+      compileNativeCheck(source, null).artifacts.sync
     }
     null
   }
