@@ -64,13 +64,17 @@ func (m *RustCompiler) Capture(ctx context.Context,
 }
 
 // Compile keeps exact results and compatible incremental state separately.
-// Previous must come from this builder or from transferring its native fields.
+// Previous cache fields must come from this builder or their native transfer.
 func (m *RustCompiler) Compile(ctx context.Context,
 	source *dagger.Directory,
 	// +optional
 	plan *dagger.File,
 	// +optional
-	previous *Cache,
+	previousManifest string,
+	// +optional
+	previousTokens []string,
+	// +optional
+	previousSnapshots []*dagger.Directory,
 	// +default=8
 	workers int,
 	// Expected Cargo command, when called by the Rust module's normal action.
@@ -119,18 +123,20 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		return nil, err
 	}
 	var retained *replay.NativeCache
-	if previous != nil {
-		if len(previous.Tokens) != len(previous.Snapshots) {
+	if previousManifest != "" {
+		if len(previousTokens) != len(previousSnapshots) {
 			return nil, fmt.Errorf("compiler cache tokens and snapshots must match")
 		}
-		retained = &replay.NativeCache{Manifest: previous.Manifest}
-		for i, token := range previous.Tokens {
-			snapshot, err := nativeDirectory(ctx, query, previous.Snapshots[i])
+		retained = &replay.NativeCache{Manifest: previousManifest}
+		for i, token := range previousTokens {
+			snapshot, err := nativeDirectory(ctx, query, previousSnapshots[i])
 			if err != nil {
 				return nil, err
 			}
 			retained.Batches = append(retained.Batches, replay.NativeCacheBatch{ID: token, Snapshot: snapshot})
 		}
+	} else if len(previousTokens) != 0 || len(previousSnapshots) != 0 {
+		return nil, fmt.Errorf("compiler cache directories require a manifest")
 	}
 	runner, err := m.tools().File("/out/worker").ID(ctx)
 	if err != nil {
@@ -161,14 +167,6 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	}
 	return &Compilation{Artifacts: dagger.Ref[*dagger.Directory](dag, dagger.ID(artifacts)), Cache: cache,
 		Hits: graph.HistoryHits, Actions: len(recipe.Actions)}, nil
-}
-
-// Restore reconstructs transferred cache fields using this engine's directories.
-func (m *RustCompiler) Restore(manifest string, tokens []string, snapshots []*dagger.Directory) (*Cache, error) {
-	if len(tokens) != len(snapshots) {
-		return nil, fmt.Errorf("compiler cache tokens and snapshots must match")
-	}
-	return &Cache{Manifest: manifest, Tokens: tokens, Snapshots: snapshots}, nil
 }
 
 func nativeQuery() *core.Query {

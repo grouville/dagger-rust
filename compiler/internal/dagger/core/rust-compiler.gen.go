@@ -79,7 +79,11 @@ func (r *RustCompiler) Capture(source *Directory, opts ...RustCompilerCaptureOpt
 type RustCompilerCompileOpts struct {
 	Plan *File
 
-	Previous *RustCompilerCache
+	PreviousManifest string
+
+	PreviousTokens []string
+
+	PreviousSnapshots []*Directory
 
 	// Default: 8
 	Workers int
@@ -92,7 +96,7 @@ type RustCompilerCompileOpts struct {
 }
 
 // Compile keeps exact results and compatible incremental state separately.
-// Previous must come from this builder or from transferring its native fields.
+// Previous cache fields must come from this builder or their native transfer.
 func (r *RustCompiler) Compile(source *Directory, opts ...RustCompilerCompileOpts) *RustCompilerCompilation {
 	assertNotNil("source", source)
 	q := r.query.Select("compile")
@@ -101,9 +105,17 @@ func (r *RustCompiler) Compile(source *Directory, opts ...RustCompilerCompileOpt
 		if !querybuilder.IsZeroValue(opts[i].Plan) {
 			q = q.Arg("plan", opts[i].Plan)
 		}
-		// `previous` optional argument
-		if !querybuilder.IsZeroValue(opts[i].Previous) {
-			q = q.Arg("previous", opts[i].Previous)
+		// `previousManifest` optional argument
+		if !querybuilder.IsZeroValue(opts[i].PreviousManifest) {
+			q = q.Arg("previousManifest", opts[i].PreviousManifest)
+		}
+		// `previousTokens` optional argument
+		if !querybuilder.IsZeroValue(opts[i].PreviousTokens) {
+			q = q.Arg("previousTokens", opts[i].PreviousTokens)
+		}
+		// `previousSnapshots` optional argument
+		if !querybuilder.IsZeroValue(opts[i].PreviousSnapshots) {
+			q = q.Arg("previousSnapshots", opts[i].PreviousSnapshots)
 		}
 		// `workers` optional argument
 		if !querybuilder.IsZeroValue(opts[i].Workers) {
@@ -183,19 +195,6 @@ func (r *RustCompiler) UnmarshalJSON(bs []byte) error {
 	}
 	*r = RustCompiler{query: selectNode(dag.QueryBuilder(), id, "RustCompiler")}
 	return nil
-}
-
-// Restore reconstructs transferred cache fields using this engine's directories.
-func (r *RustCompiler) Restore(manifest string, tokens []string, snapshots []*Directory) *RustCompilerCache {
-	q := r.query.Select("restore")
-	q = q.Arg("manifest", manifest)
-	q = q.Arg("tokens", tokens)
-	q = q.Arg("snapshots", snapshots)
-
-	return &RustCompilerCache{
-		query:     q,
-		refetchID: r.refetchID,
-	}
 }
 
 // Cache retains compiler results and incremental state as native Dagger fields.

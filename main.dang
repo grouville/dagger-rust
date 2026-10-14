@@ -204,24 +204,30 @@ type Rust {
     action("check", source, ["cargo", "check"] + cargoFlags)
   }
 
-  let nativeCheckResult(source: Directory!): NativeCompilation! {
+  let nativeCheckResult(source: Directory!, previous: NativeCache): NativeCompilation! {
     assert("A compiler plan is required for native compilation") { compilerPlan != null }
     assert("The experimental compiler backend requires a locked workspace and no extra packages") {
       locked and extraPackages.isEmpty
     }
-    let previous = if (compilerCache == null) {
-      null
+    let retained = previous ?? compilerCache
+    let previousFields = if (retained == null) {
+      NativeCache(manifest: "", tokens: [], snapshots: [])
     } else {
-      rustCompiler.restore(compilerCache.manifest, compilerCache.tokens, compilerCache.snapshots)
+      retained
     }
-    let compiled = rustCompiler.compile(source, plan: compilerPlan, previous: previous, workers: 8,
-      command: "check", cargoFlags: cargoFlags, image: image)
+    let compiled = rustCompiler.compile(source, plan: compilerPlan,
+      previousManifest: previousFields.manifest, previousTokens: previousFields.tokens, previousSnapshots: previousFields.snapshots,
+      workers: 8, command: "check", cargoFlags: cargoFlags, image: image).{{
+        artifacts.{{id}},
+        cache.{{manifest, tokens, snapshots.{{id}}}},
+        hits, actions
+      }}
     NativeCompilation(
-      artifacts: compiled.artifacts,
+      artifacts: node(compiled.artifacts.id!).{{... on Directory!}},
       cache: NativeCache(
         manifest: compiled.cache.manifest,
         tokens: compiled.cache.tokens,
-        snapshots: compiled.cache.snapshots.{{id}}.map { snapshot => node(snapshot.id).{{... on Directory!}} },
+        snapshots: compiled.cache.snapshots.map { snapshot => node(snapshot.id!).{{... on Directory!}} },
       ),
       hits: compiled.hits,
       actions: compiled.actions,
@@ -244,8 +250,9 @@ type Rust {
   pub nativeCheck(
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+    previous: NativeCache,
   ): NativeCompilation! {
-    nativeCheckResult(source)
+    nativeCheckResult(source, previous)
   }
 
   """Reconstruct a transferred cache with this engine's native directories."""
@@ -335,7 +342,7 @@ type Rust {
     if (compilerPlan == null) {
       checkResult(source).sync
     } else {
-      nativeCheckResult(source).artifacts.sync
+      nativeCheckResult(source, null).artifacts.sync
     }
     null
   }

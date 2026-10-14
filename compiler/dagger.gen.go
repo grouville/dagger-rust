@@ -307,11 +307,25 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg plan", err))
 				}
 			}
-			var previous *Cache
-			if inputArgs["previous"] != nil {
-				err = json.Unmarshal([]byte(inputArgs["previous"]), &previous)
+			var previousManifest string
+			if inputArgs["previousManifest"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["previousManifest"]), &previousManifest)
 				if err != nil {
-					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg previous", err))
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg previousManifest", err))
+				}
+			}
+			var previousTokens []string
+			if inputArgs["previousTokens"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["previousTokens"]), &previousTokens)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg previousTokens", err))
+				}
+			}
+			var previousSnapshots []*dagger.Directory
+			if inputArgs["previousSnapshots"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["previousSnapshots"]), &previousSnapshots)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg previousSnapshots", err))
 				}
 			}
 			var workers int
@@ -342,35 +356,7 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg image", err))
 				}
 			}
-			return (*RustCompiler).Compile(&parent, ctx, source, plan, previous, workers, command, cargoFlags, image)
-		case "Restore":
-			var parent RustCompiler
-			err = json.Unmarshal(parentJSON, &parent)
-			if err != nil {
-				panic(fmt.Errorf("%s: %w", "failed to unmarshal parent object", err))
-			}
-			var manifest string
-			if inputArgs["manifest"] != nil {
-				err = json.Unmarshal([]byte(inputArgs["manifest"]), &manifest)
-				if err != nil {
-					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg manifest", err))
-				}
-			}
-			var tokens []string
-			if inputArgs["tokens"] != nil {
-				err = json.Unmarshal([]byte(inputArgs["tokens"]), &tokens)
-				if err != nil {
-					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg tokens", err))
-				}
-			}
-			var snapshots []*dagger.Directory
-			if inputArgs["snapshots"] != nil {
-				err = json.Unmarshal([]byte(inputArgs["snapshots"]), &snapshots)
-				if err != nil {
-					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg snapshots", err))
-				}
-			}
-			return (*RustCompiler).Restore(&parent, manifest, tokens, snapshots)
+			return (*RustCompiler).Compile(&parent, ctx, source, plan, previousManifest, previousTokens, previousSnapshots, workers, command, cargoFlags, image)
 		default:
 			return nil, fmt.Errorf("unknown function %s", fnName)
 		}
@@ -391,23 +377,17 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 					WithFunction(
 						dag.Function("Compile",
 							dag.TypeDef().WithObject("Compilation")).
-							WithDescription("Compile keeps exact results and compatible incremental state separately.\nPrevious must come from this builder or from transferring its native fields.").
+							WithDescription("Compile keeps exact results and compatible incremental state separately.\nPrevious cache fields must come from this builder or their native transfer.").
 							WithSourceMap(dag.SourceMap("main.go", 68, 1)).
 							WithArg("source", dag.TypeDef().WithObject("Directory"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 69, 2)}).
 							WithArg("plan", dag.TypeDef().WithObject("File").WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 71, 2)}).
-							WithArg("previous", dag.TypeDef().WithObject("Cache").WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 73, 2)}).
-							WithArg("workers", dag.TypeDef().WithKind(dagger.TypeDefKindIntegerKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 75, 2), DefaultValue: dagger.JSON("8")}).
-							WithArg("command", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo command, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 78, 2)}).
-							WithArg("cargoFlags", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo flags, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 81, 2)}).
-							WithArg("image", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected toolchain image, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 84, 2)})).
-					WithFunction(
-						dag.Function("Restore",
-							dag.TypeDef().WithObject("Cache")).
-							WithDescription("Restore reconstructs transferred cache fields using this engine's directories.").
-							WithSourceMap(dag.SourceMap("main.go", 167, 1)).
-							WithArg("manifest", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 167, 32)}).
-							WithArg("tokens", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 167, 49)}).
-							WithArg("snapshots", dag.TypeDef().WithListOf(dag.TypeDef().WithObject("Directory")), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 167, 66)}))).
+							WithArg("previousManifest", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 73, 2)}).
+							WithArg("previousTokens", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 75, 2)}).
+							WithArg("previousSnapshots", dag.TypeDef().WithListOf(dag.TypeDef().WithObject("Directory")).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 77, 2)}).
+							WithArg("workers", dag.TypeDef().WithKind(dagger.TypeDefKindIntegerKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 79, 2), DefaultValue: dagger.JSON("8")}).
+							WithArg("command", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo command, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 82, 2)}).
+							WithArg("cargoFlags", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo flags, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 85, 2)}).
+							WithArg("image", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected toolchain image, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 88, 2)}))).
 			WithObject(
 				dag.TypeDef().WithObject("Compilation", dagger.TypeDefWithObjectOpts{SourceMap: dag.SourceMap("main.go", 26, 6)}).
 					WithField("Artifacts", dag.TypeDef().WithObject("Directory"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 27, 2)}).

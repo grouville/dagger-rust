@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,10 +30,12 @@ type compilation struct {
 }
 
 type transfer struct {
-	Plan     string
-	Manifest string
-	Tokens   []string
-	Edit     string
+	Plan        string
+	Manifest    string
+	Tokens      []string
+	Edit        string
+	SnapshotIDs []core.ID `json:",omitempty"`
+	CacheID     core.ID   `json:",omitempty"`
 }
 
 func main() {
@@ -43,9 +46,14 @@ func main() {
 }
 
 func run() error {
-	if len(os.Args) != 3 {
-		return fmt.Errorf("usage: integration writer|reader TRANSFER_DIRECTORY")
+	sourcePath := flag.String("source", "", "Cargo workspace used by this integration fixture")
+	cacheInConstructor := flag.Bool("cache-in-constructor", false, "use the earlier compilerCache constructor input for comparison")
+	restoreCacheFields := flag.Bool("restore-cache-fields", false, "reconstruct the cache fields on each command for comparison")
+	flag.Parse()
+	if flag.NArg() != 2 || *sourcePath == "" {
+		return fmt.Errorf("usage: integration -source WORKSPACE writer|reader|check|digests STATE_DIRECTORY")
 	}
+	stage, dir := flag.Arg(0), flag.Arg(1)
 	ctx := context.Background()
 	client, err := daggerclient.Connect(ctx)
 	if err != nil {
@@ -58,12 +66,12 @@ func run() error {
 	if err := base.Select("serveModule").Arg("address", ".").Bind(&served).Execute(ctx); err != nil {
 		return err
 	}
-	source := query.Host().Directory("/tmp/rust-cache-sipsma-review/module-baseline/source", core.HostDirectoryOpts{Exclude: []string{".git", "target", "dagger.toml", "dagger.lock"}})
+	source := query.Host().Directory(*sourcePath, core.HostDirectoryOpts{Exclude: []string{".git", "target", "dagger.toml", "dagger.lock"}})
 	sourceID, err := source.ID(ctx)
 	if err != nil {
 		return err
 	}
-	if os.Args[1] == "digests" {
+	if stage == "digests" {
 		text, err := source.File("app/src/part_0000.rs").Contents(ctx)
 		if err != nil {
 			return err
@@ -89,16 +97,83 @@ func run() error {
 			return nil, err
 		}
 		root := rust.Arg("compilerPlan", plan)
-		if previous != "" {
+		if previous != "" && *cacheInConstructor {
 			root = root.Arg("compilerCache", previous)
 		}
+		check := root.Select("nativeCheck").Arg("source", id)
+		if previous != "" && !*cacheInConstructor {
+			check = check.Arg("previous", previous)
+		}
 		var result compilation
-		err = root.Select("nativeCheck").Arg("source", id).
+		err = check.
 			SelectMultiple("id", "hits", "actions", "artifacts { id }", "cache { id manifest tokens snapshots { id } }").Bind(&result).Execute(ctx)
 		return &result, err
 	}
-	dir := os.Args[2]
-	if os.Args[1] == "writer" {
+	if stage == "check" {
+		// Each invocation imports a fresh host snapshot. Retain only metadata
+		// and native Directory IDs on this engine; never export compiler state
+		// through the host while measuring edited-command latency.
+		stored := transfer{}
+		data, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
+		if err == nil {
+			if err := json.Unmarshal(data, &stored); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		var planID, previous core.ID
+		if stored.Plan == "" {
+			if err := rust.Select("captureCheckPlan").Arg("source", sourceID).Select("id").Bind(&planID).Execute(ctx); err != nil {
+				return err
+			}
+			stored.Plan, err = core.Ref[*core.File](query, planID).Contents(ctx)
+			if err != nil {
+				return err
+			}
+		} else {
+			planID, err = query.Directory().WithNewFile("plan.json", stored.Plan).File("plan.json").ID(ctx)
+			if err != nil {
+				return err
+			}
+			if stored.CacheID != "" && !*restoreCacheFields {
+				previous = stored.CacheID
+			} else {
+				if len(stored.Tokens) != len(stored.SnapshotIDs) {
+					return fmt.Errorf("same-engine cache tokens and directory IDs must match")
+				}
+				var snapshots []*core.Directory
+				for _, id := range stored.SnapshotIDs {
+					snapshots = append(snapshots, core.Ref[*core.Directory](query, id))
+				}
+				if err := rust.Select("restoreCompilerCache").Arg("manifest", stored.Manifest).Arg("tokens", stored.Tokens).Arg("snapshots", snapshots).Select("id").Bind(&previous).Execute(ctx); err != nil {
+					return err
+				}
+			}
+		}
+		result, err := build(source, planID, previous)
+		if err != nil {
+			return err
+		}
+		stored.Manifest, stored.Tokens, stored.SnapshotIDs = result.Cache.Manifest, result.Cache.Tokens, nil
+		stored.CacheID = result.Cache.ID
+		for _, snapshot := range result.Cache.Snapshots {
+			stored.SnapshotIDs = append(stored.SnapshotIDs, snapshot.ID)
+		}
+		data, err = json.Marshal(stored)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "metadata.json"), data, 0644); err != nil {
+			return err
+		}
+		fmt.Printf("PASS: fresh-command native check reused %d/%d actions\n", result.Hits, result.Actions)
+		return nil
+	}
+	if stage == "writer" {
 		var planID core.ID
 		if err := rust.Select("captureCheckPlan").Arg("source", sourceID).Select("id").Bind(&planID).Execute(ctx); err != nil {
 			return err
@@ -110,6 +185,14 @@ func run() error {
 		if cold.Actions != 4 || cold.Hits != 0 {
 			return fmt.Errorf("cold result: %+v", cold)
 		}
+		var checked bool
+		if err := rust.Arg("compilerPlan", planID).Arg("compilerCache", cold.Cache.ID).
+			Select("check").Arg("source", sourceID).Select("pass").Bind(&checked).Execute(ctx); err != nil {
+			return fmt.Errorf("normal check entrypoint: %w", err)
+		}
+		if !checked {
+			return fmt.Errorf("normal check entrypoint failed")
+		}
 		original, err := source.File("app/src/part_0000.rs").Contents(ctx)
 		if err != nil {
 			return err
@@ -118,26 +201,15 @@ func run() error {
 		if edited == original {
 			return fmt.Errorf("fixture edit did not change")
 		}
-		filename := "/tmp/rust-cache-sipsma-review/module-baseline/source/app/src/part_0000.rs"
-		defer os.WriteFile(filename, []byte(original), 0644)
-		if err := os.WriteFile(filename, []byte(edited), 0644); err != nil {
-			return err
-		}
-		edit := query.Host().Directory("/tmp/rust-cache-sipsma-review/module-baseline/source", core.HostDirectoryOpts{Exclude: []string{".git", "target", "dagger.toml", "dagger.lock"}})
+		edit := source.WithNewFile("app/src/part_0000.rs", edited)
 		changed, err := build(edit, planID, cold.Cache.ID)
 		if err != nil {
 			return err
 		}
 		if changed.Hits != 3 {
-			_ = os.WriteFile("/tmp/rust-cache-sipsma-review/module-cold-manifest.json", []byte(cold.Cache.Manifest), 0644)
-			_ = os.WriteFile("/tmp/rust-cache-sipsma-review/module-edited-manifest.json", []byte(changed.Cache.Manifest), 0644)
 			return fmt.Errorf("edited result reused %d/4", changed.Hits)
 		}
-		if err := os.WriteFile(filename, []byte(original), 0644); err != nil {
-			return err
-		}
-		revertedSource := query.Host().Directory("/tmp/rust-cache-sipsma-review/module-baseline/source", core.HostDirectoryOpts{Exclude: []string{".git", "target", "dagger.toml", "dagger.lock"}})
-		reverted, err := build(revertedSource, planID, changed.Cache.ID)
+		reverted, err := build(source, planID, changed.Cache.ID)
 		if err != nil {
 			return err
 		}
@@ -166,7 +238,7 @@ func run() error {
 		fmt.Println("PASS: actual Rust module cold check, edited 3/4 hits, reverted 4/4 hits; native cache fields exported")
 		return nil
 	}
-	if os.Args[1] != "reader" {
+	if stage != "reader" {
 		return fmt.Errorf("unknown stage")
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "metadata.json"))
@@ -189,16 +261,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	filename := "/tmp/rust-cache-sipsma-review/module-baseline/source/app/src/part_0000.rs"
-	original, err := os.ReadFile(filename)
-	if err != nil {
-		return err
-	}
-	defer os.WriteFile(filename, original, 0644)
-	if err := os.WriteFile(filename, []byte(stored.Edit), 0644); err != nil {
-		return err
-	}
-	edit := query.Host().Directory("/tmp/rust-cache-sipsma-review/module-baseline/source", core.HostDirectoryOpts{Exclude: []string{".git", "target", "dagger.toml", "dagger.lock"}})
+	edit := source.WithNewFile("app/src/part_0000.rs", stored.Edit)
 	reused, err := build(edit, planID, previous)
 	if err != nil {
 		return err
@@ -207,11 +270,7 @@ func run() error {
 		return fmt.Errorf("fresh engine reused %d/4", reused.Hits)
 	}
 	next := regexp.MustCompile(`pub const EDIT: u64 = \d+;`).ReplaceAllString(stored.Edit, "pub const EDIT: u64 = 987654322;")
-	if err := os.WriteFile(filename, []byte(next), 0644); err != nil {
-		return err
-	}
-	nextSource := query.Host().Directory("/tmp/rust-cache-sipsma-review/module-baseline/source", core.HostDirectoryOpts{Exclude: []string{".git", "target", "dagger.toml", "dagger.lock"}})
-	changed, err := build(nextSource, planID, reused.Cache.ID)
+	changed, err := build(source.WithNewFile("app/src/part_0000.rs", next), planID, reused.Cache.ID)
 	if err != nil {
 		return err
 	}
