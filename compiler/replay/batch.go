@@ -57,14 +57,23 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 		incremental = mergeArtifactDirectories(seeds)
 	}
 	state := client.Directory().WithDirectory("target", target).WithDirectory("incremental", incremental)
-	for _, seed := range opts.automatic.batchSeeds {
-		// Copy only the selected crates into their final input path. An
-		// intermediate filtered directory would copy the same state twice.
-		state = state.WithDirectory("incremental", seed.directory, dagger.DirectoryWithDirectoryOpts{Include: seed.include})
+	if opts.BatchIncrementalMount {
+		incremental = mountedIncrementalState(client, missing, opts.automatic)
+		state = client.Directory().WithDirectory("target", target)
+	} else {
+		for _, seed := range opts.automatic.batchSeeds {
+			// Copy only the selected crates into their final input path. An
+			// intermediate filtered directory would copy the same state twice.
+			state = state.WithDirectory("incremental", seed.directory, dagger.DirectoryWithDirectoryOpts{Include: seed.include})
+		}
 	}
 	container := client.Container(dagger.ContainerOpts{Platform: "linux/amd64"}).From(plan.Image).
 		WithMountedDirectory(model.SourceRoot, workspace).
-		WithMountedDirectory(worker.OutputRoot, state).
+		WithMountedDirectory(worker.OutputRoot, state)
+	if opts.BatchIncrementalMount {
+		container = container.WithMountedDirectory(worker.IncrementalRoot, incremental)
+	}
+	container = container.
 		WithMountedFile(worker.Root+"/runner", opts.BatchCompiler).
 		WithNewFile(worker.Root+"/request.json", string(contents), dagger.ContainerWithNewFileOpts{Permissions: 0600}).
 		WithExec([]string{worker.Root + "/runner", "worker", worker.Root + "/request.json"}, noNesting())
@@ -92,8 +101,40 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 	// compiler trees after success. Reuse that snapshot rather than copying
 	// every artifact into a newly filtered directory.
 	graph.Artifacts = container.Directory(worker.TargetRoot)
-	// Outputs, incremental state and markers share one mounted snapshot.
-	// Manifest entries still select each crate's results independently.
+	// Manifest entries select each crate's results independently. A separate
+	// incremental mount is retained directly rather than joined into this tree.
 	graph.batchSnapshot = container.Directory(worker.OutputRoot)
+	if opts.BatchIncrementalMount {
+		graph.batchIncremental = container.Directory(worker.IncrementalRoot)
+	}
 	return graph, nil
+}
+
+// Start from the largest compatible native seed snapshot. Copy only the
+// selected crates supplied by other snapshots; absent seeds start empty.
+func mountedIncrementalState(client *dagger.Query, missing []model.Action, inputs *automaticInputs) *dagger.Directory {
+	state := client.Directory()
+	largest := -1
+	for i, group := range inputs.batchSeeds {
+		if largest == -1 || len(group.include) > len(inputs.batchSeeds[largest].include) {
+			largest = i
+		}
+	}
+	if largest != -1 {
+		state = inputs.batchSeeds[largest].directory
+	}
+	for i, group := range inputs.batchSeeds {
+		if i != largest {
+			state = state.WithDirectory(".", group.directory, dagger.DirectoryWithDirectoryOpts{Include: group.include})
+		}
+	}
+	for _, action := range missing {
+		seed := inputs.seeds[action.ID]
+		if seed == nil && largest != -1 {
+			state = state.WithoutDirectory(worker.Token(action.ID))
+		} else if seed != nil && !inputs.batchSeeded[action.ID] {
+			state = state.WithDirectory(worker.Token(action.ID), seed)
+		}
+	}
+	return state
 }

@@ -29,15 +29,16 @@ type Operation struct {
 }
 
 type Graph struct {
-	Operations    []Operation
-	Artifacts     *dagger.Directory
-	Incremental   *dagger.Directory
-	History       *dagger.Directory
-	Cache         *NativeCache
-	HistoryHits   int
-	BatchTrace    *dagger.File
-	batchSnapshot *dagger.Directory
-	results       map[string]*dagger.Directory
+	Operations       []Operation
+	Artifacts        *dagger.Directory
+	Incremental      *dagger.Directory
+	History          *dagger.Directory
+	Cache            *NativeCache
+	HistoryHits      int
+	BatchTrace       *dagger.File
+	batchSnapshot    *dagger.Directory
+	batchIncremental *dagger.Directory
+	results          map[string]*dagger.Directory
 }
 
 // BuildOptions exposes incremental-state and artifact-layout experiments. The
@@ -57,8 +58,11 @@ type BuildOptions struct {
 	BatchCompiler     *dagger.File
 	BatchWorkers      int
 	BatchNoPipelining bool
-	automatic         *automaticInputs
-	nativeCache       *NativeCache
+	// BatchIncrementalMount keeps incremental state in a separate native
+	// snapshot, avoiding a copy into the artifact/marker snapshot.
+	BatchIncrementalMount bool
+	automatic             *automaticInputs
+	nativeCache           *NativeCache
 }
 
 type ActionReport struct {

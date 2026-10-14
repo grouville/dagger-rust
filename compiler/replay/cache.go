@@ -16,9 +16,10 @@ import (
 // files into a history archive. Only caches produced by this builder are valid
 // inputs; a serialized list of engine-local IDs is not a portable cache.
 type NativeCache struct {
-	Manifest  string
-	Batches   []NativeCacheBatch
-	snapshots map[string]*dagger.Directory
+	Manifest     string
+	Batches      []NativeCacheBatch
+	snapshots    map[string]*dagger.Directory
+	incrementals map[string]*dagger.Directory
 }
 
 type NativeCacheBatch struct {
@@ -56,6 +57,13 @@ func (cache *NativeCache) validate(manifest historyManifest) error {
 	if manifest.CurrentBatch != "" && cache.snapshots[manifest.CurrentBatch] == nil {
 		return fmt.Errorf("missing current native cache batch")
 	}
+	cache.incrementals = make(map[string]*dagger.Directory, len(manifest.IncrementalBatches))
+	for batch, state := range manifest.IncrementalBatches {
+		if cache.snapshots[batch] == nil || cache.snapshots[state] == nil {
+			return fmt.Errorf("missing native incremental cache snapshot")
+		}
+		cache.incrementals[batch] = cache.snapshots[state]
+	}
 	for _, entries := range manifest.Actions {
 		for _, entry := range entries {
 			if entry.Batch == "" || cache.snapshots[entry.Batch] == nil {
@@ -69,6 +77,14 @@ func (cache *NativeCache) validate(manifest historyManifest) error {
 func (cache *NativeCache) directory(name string) *dagger.Directory {
 	name = strings.TrimPrefix(name, "batches/")
 	id, subdir, _ := strings.Cut(name, "/")
+	if state := cache.incrementals[id]; state != nil {
+		if subdir == "incremental" {
+			return state
+		}
+		if path, ok := strings.CutPrefix(subdir, "incremental/"); ok {
+			return state.Directory(path)
+		}
+	}
 	if subdir == "" {
 		return cache.snapshots[id]
 	}

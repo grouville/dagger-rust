@@ -67,3 +67,25 @@ module passes the 102-action fanout fixture: cold 0/102 reuse, leaf edit
 fails without publishing new cache metadata. This extends performance
 measurement beyond the four-crate fixture; automatic cache discovery and
 real registry/build-script coverage remain unfinished.
+
+This branch tests an independently mounted incremental-state snapshot. It
+starts from the largest compatible seed directory and copies only selected
+crates from other seeds. The artifact/marker and incremental snapshots are
+both native Directory fields, retained through the existing tokens/snapshots
+API. Format 2 maps artifact batches to their incremental snapshots; format 1
+remains readable, and exact compiler-result keys keep their original version.
+Missing, ambiguous and aliased incremental references are rejected.
+
+The 102-crate cold build, expected leaf/shared reuse, invalid-source failure,
+exact reversion, normal check entrypoint and transfer to a fresh engine pass.
+Unit tests pass in model, replay, worker and compiler-wrapper packages.
+
+One shared-edit profile reduces state-copy critical time from 105 to 41 ms.
+More native references add API requests; retaining already resolved input IDs
+reduces the experiment's query count from 122 to 112, versus 87 in the control.
+Five paired edits give shared medians of 1.510 versus 1.451 seconds and leaf
+medians of 1.004 versus 1.036 seconds. A candidate leaf run takes 8.014 seconds
+and is retained. CPU pressure reaches 31.3%. This does not establish a general
+speedup, so the layout remains experimental. Seed selection still affects
+ordinary execution cache keys; no compiler input is ignored. Extra snapshot
+references, unrelated seed contents and physical retention need measurement.

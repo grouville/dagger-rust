@@ -123,16 +123,22 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		return nil, err
 	}
 	var retained *replay.NativeCache
+	retainedIDs := map[string]core.ID{}
 	if previousManifest != "" {
 		if len(previousTokens) != len(previousSnapshots) {
 			return nil, fmt.Errorf("compiler cache tokens and snapshots must match")
 		}
 		retained = &replay.NativeCache{Manifest: previousManifest}
 		for i, token := range previousTokens {
-			snapshot, err := nativeDirectory(ctx, query, previousSnapshots[i])
+			if previousSnapshots[i] == nil {
+				return nil, fmt.Errorf("native directory is required")
+			}
+			id, err := previousSnapshots[i].ID(ctx)
 			if err != nil {
 				return nil, err
 			}
+			snapshot := core.Ref[*core.Directory](query, core.ID(id))
+			retainedIDs[token] = core.ID(id)
 			retained.Batches = append(retained.Batches, replay.NativeCacheBatch{ID: token, Snapshot: snapshot})
 		}
 	} else if len(previousTokens) != 0 || len(previousSnapshots) != 0 {
@@ -144,6 +150,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	}
 	graph, err := replay.BuildNativeCached(ctx, query, &recipe, native, replay.BuildOptions{
 		BatchCompiler: core.Ref[*core.File](query, core.ID(runner)), BatchWorkers: workers,
+		BatchIncrementalMount: true,
 	}, retained)
 	if err != nil {
 		return nil, err
@@ -158,9 +165,12 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	}
 	cache := &Cache{Manifest: graph.Cache.Manifest}
 	for _, batch := range graph.Cache.Batches {
-		id, err := batch.Snapshot.ID(ctx)
-		if err != nil {
-			return nil, err
+		id, retained := retainedIDs[batch.ID]
+		if !retained {
+			id, err = batch.Snapshot.ID(ctx)
+			if err != nil {
+				return nil, err
+			}
 		}
 		cache.Tokens = append(cache.Tokens, batch.ID)
 		cache.Snapshots = append(cache.Snapshots, dagger.Ref[*dagger.Directory](dag, dagger.ID(id)))

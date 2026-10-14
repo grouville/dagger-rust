@@ -17,6 +17,7 @@ import (
 )
 
 const historyVersion = 1
+const incrementalMountHistoryVersion = 2
 const historyEntriesPerAction = 4
 
 // HistoryReference is only a local pointer. The referenced Directory contains
@@ -71,9 +72,10 @@ type historyEntry struct {
 }
 
 type historyManifest struct {
-	Version      int                       `json:"version"`
-	Actions      map[string][]historyEntry `json:"actions"`
-	CurrentBatch string                    `json:"current_batch,omitempty"`
+	Version            int                       `json:"version"`
+	Actions            map[string][]historyEntry `json:"actions"`
+	CurrentBatch       string                    `json:"current_batch,omitempty"`
+	IncrementalBatches map[string]string         `json:"incremental_batches,omitempty"`
 }
 
 type retainedResult struct {
@@ -172,6 +174,8 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 		if err := opts.nativeCache.validate(old); err != nil {
 			return nil, err
 		}
+	} else if opts.BatchIncrementalMount || len(old.IncrementalBatches) != 0 {
+		return nil, fmt.Errorf("separate incremental snapshots require native object history")
 	}
 	var workerDigest string
 	if opts.BatchCompiler != nil {
@@ -324,6 +328,31 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 		}
 	}
 	if opts.nativeCache != nil {
+		var incrementalID string
+		if graph.batchIncremental != nil {
+			incrementalID, err = historyDigest([]string{"incremental", batchID})
+			if err != nil {
+				return nil, err
+			}
+		}
+		for id := range keepBatches {
+			state := old.IncrementalBatches[id]
+			if id == batchID {
+				state = incrementalID
+			}
+			if state != "" {
+				if next.IncrementalBatches == nil {
+					next.IncrementalBatches = map[string]string{}
+				}
+				next.IncrementalBatches[id] = state
+			}
+		}
+		for _, state := range next.IncrementalBatches {
+			keepBatches[state] = true
+		}
+		if len(next.IncrementalBatches) != 0 {
+			next.Version = incrementalMountHistoryVersion
+		}
 		contents, err := json.Marshal(next)
 		if err != nil {
 			return nil, err
@@ -333,6 +362,8 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 			var snapshot *dagger.Directory
 			if id == batchID {
 				snapshot = graph.batchSnapshot
+			} else if id == incrementalID {
+				snapshot = graph.batchIncremental
 			} else {
 				snapshot = opts.nativeCache.snapshots[id]
 			}
@@ -397,15 +428,29 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 }
 
 func (h historyManifest) validate() error {
-	if h.Version != historyVersion || h.Actions == nil {
+	if (h.Version != historyVersion && h.Version != incrementalMountHistoryVersion) || h.Actions == nil ||
+		(h.Version == incrementalMountHistoryVersion) != (len(h.IncrementalBatches) != 0) {
 		return fmt.Errorf("unsupported native history format")
 	}
+	for batch, state := range h.IncrementalBatches {
+		if batch == state {
+			return fmt.Errorf("incremental snapshot must differ from its artifact snapshot")
+		}
+		for _, value := range []string{batch, state} {
+			decoded, err := hex.DecodeString(value)
+			if err != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != value {
+				return fmt.Errorf("invalid incremental snapshot digest")
+			}
+		}
+	}
 	seen := map[string]bool{}
+	batches := map[string]bool{}
 	if h.CurrentBatch != "" {
 		decoded, err := hex.DecodeString(h.CurrentBatch)
 		if err != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != h.CurrentBatch {
 			return fmt.Errorf("invalid current native history batch")
 		}
+		batches[h.CurrentBatch] = true
 	}
 	for id, entries := range h.Actions {
 		if id == "" || len(entries) == 0 || len(entries) > historyEntriesPerAction {
@@ -415,6 +460,7 @@ func (h historyManifest) validate() error {
 			values := []string{entry.Key, entry.Compatibility}
 			if entry.Batch != "" {
 				values = append(values, entry.Batch)
+				batches[entry.Batch] = true
 			}
 			for _, value := range values {
 				decoded, err := hex.DecodeString(value)
@@ -427,6 +473,13 @@ func (h historyManifest) validate() error {
 			}
 			seen[entry.Key] = true
 		}
+	}
+	states := map[string]bool{}
+	for batch, state := range h.IncrementalBatches {
+		if !batches[batch] || batches[state] || states[state] {
+			return fmt.Errorf("ambiguous or unreferenced incremental snapshot")
+		}
+		states[state] = true
 	}
 	return nil
 }
