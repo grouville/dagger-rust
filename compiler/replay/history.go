@@ -22,7 +22,6 @@ const historyEntriesPerAction = 4
 // Accept histories written by the eight-build experiment. The current policy
 // can compact them sooner without discarding exact compiler results.
 const maxBatchCopyOnWriteDepth = 8
-const batchCopyOnWriteInterval = historyEntriesPerAction
 
 // HistoryReference is only a local pointer. The referenced Directory contains
 // the complete, portable history: metadata, compiler outputs and rustc state.
@@ -95,7 +94,6 @@ type automaticInputs struct {
 	batchSeeds  []batchSeed
 	batchSeeded map[string]bool
 	batchBase   *dagger.Directory
-	batchDepth  int
 }
 
 type batchSeed struct {
@@ -302,7 +300,6 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 		len(seedGroups) == 1 && len(seedGroups[old.CurrentBatch]) == len(actions)-len(inputs.hits) &&
 		len(overlays) == 0 {
 		inputs.batchBase = lookup("batches/" + old.CurrentBatch)
-		inputs.batchDepth = old.BatchDepths[old.CurrentBatch]
 	}
 	if inputs.artifacts != nil && len(missingOutputs) > 0 {
 		for _, overlay := range overlays {

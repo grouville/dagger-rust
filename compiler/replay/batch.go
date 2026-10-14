@@ -60,15 +60,11 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 	}
 	depth := 0
 	if opts.automatic.batchBase != nil {
-		state = opts.automatic.batchBase
-		depth = opts.automatic.batchDepth
-		if depth >= batchCopyOnWriteInterval {
-			// Detach physical ancestry periodically. A checkpoint detaches the
-			// Dagger recipe, but its filesystem still has snapshot parents.
-			state = client.Directory().WithDirectory(".", state)
-			depth = 0
-		}
-		depth++
+		// Assemble one complete input without filtering seeds or retaining
+		// the previous batch's filesystem parents. Native copying can share
+		// immutable files; the worker removes outputs it will rebuild.
+		state = client.Directory().WithDirectory(".", opts.automatic.batchBase)
+		depth = 1
 		request.CleanOutputs = true
 	}
 	contents, err := json.Marshal(request)
