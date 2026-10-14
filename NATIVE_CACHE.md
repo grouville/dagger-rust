@@ -59,3 +59,11 @@ advertised beta.16 and failed nested calls against the beta.17 engine.
 No upstream PR is open for this integration. Automatic plan/cache discovery,
 the ordinary check workflow, larger dependency graphs and physical cache
 retention/transfer costs still need work.
+
+The integration driver's check stage accepts `-expected-actions` and
+`-expected-hits`, asserting them before storing cache metadata. The actual
+module passes the 102-action fanout fixture: cold 0/102 reuse, leaf edit
+100/102, shared edit 0/102, and a breaking shared-library type change that
+fails without publishing new cache metadata. This extends performance
+measurement beyond the four-crate fixture; automatic cache discovery and
+real registry/build-script coverage remain unfinished.

@@ -49,6 +49,8 @@ func run() error {
 	sourcePath := flag.String("source", "", "Cargo workspace used by this integration fixture")
 	cacheInConstructor := flag.Bool("cache-in-constructor", false, "use the earlier compilerCache constructor input for comparison")
 	restoreCacheFields := flag.Bool("restore-cache-fields", false, "reconstruct the cache fields on each command for comparison")
+	expectedActions := flag.Int("expected-actions", -1, "expected compiler action count for the check stage; negative disables the assertion")
+	expectedHits := flag.Int("expected-hits", -1, "expected reused compiler actions for the check stage; negative disables the assertion")
 	flag.Parse()
 	if flag.NArg() != 2 || *sourcePath == "" {
 		return fmt.Errorf("usage: integration -source WORKSPACE writer|reader|check|digests STATE_DIRECTORY")
@@ -154,6 +156,12 @@ func run() error {
 		result, err := build(source, planID, previous)
 		if err != nil {
 			return err
+		}
+		if *expectedActions >= 0 && result.Actions != *expectedActions {
+			return fmt.Errorf("expected %d compiler actions, got %d", *expectedActions, result.Actions)
+		}
+		if *expectedHits >= 0 && result.Hits != *expectedHits {
+			return fmt.Errorf("expected %d reused compiler actions, got %d", *expectedHits, result.Hits)
 		}
 		stored.Manifest, stored.Tokens, stored.SnapshotIDs = result.Cache.Manifest, result.Cache.Tokens, nil
 		stored.CacheID = result.Cache.ID
