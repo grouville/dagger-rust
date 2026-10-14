@@ -1,5 +1,9 @@
 # Experimental native compiler cache
 
+This branch also tests [branching the latest native compiler snapshot](NATIVE_BATCH_COW.md).
+Its modest shared-edit improvement comes with a measured storage tradeoff; the
+experiment remains separate from the module's default backend.
+
 This branch selects compiler plans automatically. `nativeCheck` captures the
 first plan and retains it as `cache.plan`, a native File. Passing the previous
 cache reuses that plan for ordinary source edits. Configuration, source-path,

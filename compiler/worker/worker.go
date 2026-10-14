@@ -39,6 +39,7 @@ type Request struct {
 	Packages     []model.Package `json:"packages"`
 	Concurrency  int             `json:"concurrency"`
 	Pipelining   bool            `json:"pipelining"`
+	CleanOutputs bool            `json:"clean_outputs,omitempty"`
 }
 
 type Timing struct {
@@ -74,6 +75,11 @@ func Run(ctx context.Context, request Request) ([]Timing, error) {
 			return nil, fmt.Errorf("duplicate or empty compiler action")
 		}
 		pending[action.ID], all[action.ID] = action, action
+	}
+	if request.CleanOutputs {
+		if err := removePreviousOutputs(TargetRoot, request.Actions); err != nil {
+			return nil, fmt.Errorf("remove previous compiler outputs: %w", err)
+		}
 	}
 	complete, metadata := map[string]bool{}, map[string]bool{}
 	events := make(chan event, 2*len(all))
@@ -125,6 +131,23 @@ func Run(ctx context.Context, request Request) ([]Timing, error) {
 
 func cleanupPrivateTargets(target string) error {
 	return os.RemoveAll(path.Join(target, ".rcexp-private"))
+}
+
+// No compiler may observe a previous generation's output while waiting for a
+// dependency's new metadata. Keep exact-hit artifacts and rustc's private
+// incremental state; only the actions being recompiled lose their outputs.
+func removePreviousOutputs(target string, actions []model.Action) error {
+	for _, action := range actions {
+		for _, output := range action.Outputs {
+			if path.Clean(output) != output || !model.Within(model.TargetRoot, output) || output == model.TargetRoot {
+				return fmt.Errorf("invalid compiler output %q", output)
+			}
+			if err := os.Remove(privatePath(target, output)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func ready(action model.Action, all map[string]model.Action, complete, metadata map[string]bool, pipelining bool) bool {

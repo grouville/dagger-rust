@@ -40,6 +40,36 @@ func TestCleanupPrivateTargetsPreservesPublishedArtifacts(t *testing.T) {
 	}
 }
 
+func TestRemovePreviousOutputsKeepsExactHitsAndIncrementalState(t *testing.T) {
+	target := t.TempDir()
+	for _, name := range []string{"debug/deps/changed.rmeta", "debug/deps/cached.rmeta", "incremental/query-cache.bin"} {
+		filename := filepath.Join(target, name)
+		if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte("previous state"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	actions := []model.Action{{Outputs: []string{"/target/debug/deps/changed.rmeta", "/target/debug/deps/missing.rlib"}}}
+	if err := removePreviousOutputs(target, actions); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "debug/deps/changed.rmeta")); !os.IsNotExist(err) {
+		t.Fatalf("old metadata remains visible to dependent compilers: %v", err)
+	}
+	for _, name := range []string{"debug/deps/cached.rmeta", "incremental/query-cache.bin"} {
+		if contents, err := os.ReadFile(filepath.Join(target, name)); err != nil || string(contents) != "previous state" {
+			t.Fatalf("retained %s was changed: %q, %v", name, contents, err)
+		}
+	}
+	for _, output := range []string{"/target", "/target/../../outside", "/elsewhere/output"} {
+		if err := removePreviousOutputs(target, []model.Action{{Outputs: []string{output}}}); err == nil {
+			t.Errorf("accepted unsafe output %q", output)
+		}
+	}
+}
+
 func TestMetadataAllowsLibraryButBinaryWaitsForTransitiveCodegen(t *testing.T) {
 	a := model.Action{ID: "a", Outputs: []string{"a.rmeta"}}
 	b := model.Action{ID: "b", Outputs: []string{"b.rmeta"}, Dependencies: []string{"a"}, Args: []string{"--extern", "a=a.rmeta"}}

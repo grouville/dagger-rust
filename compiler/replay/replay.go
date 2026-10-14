@@ -37,6 +37,7 @@ type Graph struct {
 	HistoryHits   int
 	BatchTrace    *dagger.File
 	batchSnapshot *dagger.Directory
+	batchDepth    int
 	results       map[string]*dagger.Directory
 }
 
@@ -57,6 +58,7 @@ type BuildOptions struct {
 	BatchCompiler      *dagger.File
 	BatchWorkers       int
 	BatchNoPipelining  bool
+	BatchCopyOnWrite   bool
 	automatic          *automaticInputs
 	nativeCache        *NativeCache
 	nativeConfigDigest string

@@ -39,10 +39,6 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 	}
 	request := worker.Request{Actions: missing, Dependencies: plan.Actions, Packages: plan.Packages,
 		Concurrency: opts.BatchWorkers, Pipelining: !opts.BatchNoPipelining}
-	contents, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
 	workspace := opts.SourceDirectory
 	if workspace == nil {
 		workspace = source.Directory(client)
@@ -62,13 +58,30 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 		// intermediate filtered directory would copy the same state twice.
 		state = state.WithDirectory("incremental", seed.directory, dagger.DirectoryWithDirectoryOpts{Include: seed.include})
 	}
+	depth := 0
+	if opts.automatic.batchBase != nil {
+		state = opts.automatic.batchBase
+		depth = opts.automatic.batchDepth
+		if depth == maxBatchCopyOnWriteDepth {
+			// Detach physical ancestry periodically. A checkpoint detaches the
+			// Dagger recipe, but its filesystem still has snapshot parents.
+			state = client.Directory().WithDirectory(".", state)
+			depth = 0
+		}
+		depth++
+		request.CleanOutputs = true
+	}
+	contents, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
 	container := client.Container(dagger.ContainerOpts{Platform: "linux/amd64"}).From(plan.Image).
 		WithMountedDirectory(model.SourceRoot, workspace).
 		WithMountedDirectory(worker.OutputRoot, state).
 		WithMountedFile(worker.Root+"/runner", opts.BatchCompiler).
 		WithNewFile(worker.Root+"/request.json", string(contents), dagger.ContainerWithNewFileOpts{Permissions: 0600}).
 		WithExec([]string{worker.Root + "/runner", "worker", worker.Root + "/request.json"}, noNesting())
-	graph := &Graph{results: map[string]*dagger.Directory{}, BatchTrace: container.File(worker.Root + "/timings.json")}
+	graph := &Graph{results: map[string]*dagger.Directory{}, BatchTrace: container.File(worker.Root + "/timings.json"), batchDepth: depth}
 	for _, action := range actions {
 		retained := opts.automatic.hits[action.ID]
 		operation := Operation{Action: action, Files: map[string]*dagger.File{}}

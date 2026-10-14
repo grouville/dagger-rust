@@ -18,6 +18,7 @@ import (
 
 const historyVersion = 1
 const historyEntriesPerAction = 4
+const maxBatchCopyOnWriteDepth = 8
 
 // HistoryReference is only a local pointer. The referenced Directory contains
 // the complete, portable history: metadata, compiler outputs and rustc state.
@@ -74,6 +75,7 @@ type historyManifest struct {
 	Version      int                       `json:"version"`
 	Actions      map[string][]historyEntry `json:"actions"`
 	CurrentBatch string                    `json:"current_batch,omitempty"`
+	BatchDepths  map[string]int            `json:"batch_depths,omitempty"`
 }
 
 type retainedResult struct {
@@ -88,6 +90,8 @@ type automaticInputs struct {
 	artifacts   *dagger.Directory
 	batchSeeds  []batchSeed
 	batchSeeded map[string]bool
+	batchBase   *dagger.Directory
+	batchDepth  int
 }
 
 type batchSeed struct {
@@ -181,7 +185,11 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 			return nil, err
 		}
 	}
-	configuration, err := historyDigest([]any{recipeConfiguration(plan), workerDigest, opts.BatchWorkers, opts.BatchNoPipelining})
+	configurationInputs := []any{recipeConfiguration(plan), workerDigest, opts.BatchWorkers, opts.BatchNoPipelining}
+	if opts.BatchCopyOnWrite {
+		configurationInputs = append(configurationInputs, true)
+	}
+	configuration, err := historyDigest(configurationInputs)
 	if err != nil {
 		return nil, err
 	}
@@ -283,6 +291,15 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 			include:   seedGroups[group],
 		})
 	}
+	// Reuse a whole native batch only when it supplies every selected seed and
+	// the latest artifacts. Reverts or mixed seed generations use the existing
+	// filtered-copy path. The worker removes stale outputs before scheduling.
+	if opts.BatchCopyOnWrite && opts.nativeCache != nil && old.CurrentBatch != "" &&
+		len(seedGroups) == 1 && len(seedGroups[old.CurrentBatch]) == len(actions)-len(inputs.hits) &&
+		len(overlays) == 0 {
+		inputs.batchBase = lookup("batches/" + old.CurrentBatch)
+		inputs.batchDepth = old.BatchDepths[old.CurrentBatch]
+	}
 	if inputs.artifacts != nil && len(missingOutputs) > 0 {
 		for _, overlay := range overlays {
 			inputs.artifacts = inputs.artifacts.WithDirectory(".", overlay)
@@ -324,6 +341,18 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 		}
 	}
 	if opts.nativeCache != nil {
+		for id := range keepBatches {
+			depth := old.BatchDepths[id]
+			if id == batchID {
+				depth = graph.batchDepth
+			}
+			if depth > 0 {
+				if next.BatchDepths == nil {
+					next.BatchDepths = map[string]int{}
+				}
+				next.BatchDepths[id] = depth
+			}
+		}
 		contents, err := json.Marshal(next)
 		if err != nil {
 			return nil, err
@@ -401,11 +430,13 @@ func (h historyManifest) validate() error {
 		return fmt.Errorf("unsupported native history format")
 	}
 	seen := map[string]bool{}
+	batches := map[string]bool{}
 	if h.CurrentBatch != "" {
 		decoded, err := hex.DecodeString(h.CurrentBatch)
 		if err != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != h.CurrentBatch {
 			return fmt.Errorf("invalid current native history batch")
 		}
+		batches[h.CurrentBatch] = true
 	}
 	for id, entries := range h.Actions {
 		if id == "" || len(entries) == 0 || len(entries) > historyEntriesPerAction {
@@ -415,6 +446,7 @@ func (h historyManifest) validate() error {
 			values := []string{entry.Key, entry.Compatibility}
 			if entry.Batch != "" {
 				values = append(values, entry.Batch)
+				batches[entry.Batch] = true
 			}
 			for _, value := range values {
 				decoded, err := hex.DecodeString(value)
@@ -426,6 +458,11 @@ func (h historyManifest) validate() error {
 				return fmt.Errorf("duplicate native history result for %q", id)
 			}
 			seen[entry.Key] = true
+		}
+	}
+	for id, depth := range h.BatchDepths {
+		if !batches[id] || depth < 1 || depth > maxBatchCopyOnWriteDepth {
+			return fmt.Errorf("invalid native batch snapshot depth")
 		}
 	}
 	return nil

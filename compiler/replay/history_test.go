@@ -48,3 +48,21 @@ func TestSourceContentDigestTracksAllPackageInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestHistoryBoundsPhysicalSnapshotAncestry(t *testing.T) {
+	batch := strings.Repeat("c", 64)
+	entry := historyEntry{Key: strings.Repeat("a", 64), Compatibility: strings.Repeat("b", 64), Batch: batch}
+	for _, depth := range []int{0, 1, maxBatchCopyOnWriteDepth, maxBatchCopyOnWriteDepth + 1} {
+		manifest := historyManifest{Version: historyVersion, Actions: map[string][]historyEntry{"a": {entry}},
+			CurrentBatch: batch, BatchDepths: map[string]int{batch: depth}}
+		err := manifest.validate()
+		if (err == nil) != (depth > 0 && depth <= maxBatchCopyOnWriteDepth) {
+			t.Errorf("depth %d: %v", depth, err)
+		}
+	}
+	manifest := historyManifest{Version: historyVersion, Actions: map[string][]historyEntry{"a": {entry}},
+		BatchDepths: map[string]int{strings.Repeat("d", 64): 1}}
+	if err := manifest.validate(); err == nil {
+		t.Fatal("accepted depth for an unretained batch")
+	}
+}

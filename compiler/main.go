@@ -181,7 +181,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		return nil, err
 	}
 	graph, err := replay.BuildNativeCached(ctx, query, &recipe, native, replay.BuildOptions{
-		BatchCompiler: core.Ref[*core.File](query, core.ID(runner)), BatchWorkers: workers,
+		BatchCompiler: core.Ref[*core.File](query, core.ID(runner)), BatchWorkers: workers, BatchCopyOnWrite: true,
 	}, retained)
 	if err != nil {
 		return nil, err
