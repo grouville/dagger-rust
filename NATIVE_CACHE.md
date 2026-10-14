@@ -67,3 +67,14 @@ module passes the 102-action fanout fixture: cold 0/102 reuse, leaf edit
 fails without publishing new cache metadata. This extends performance
 measurement beyond the four-crate fixture; automatic cache discovery and
 real registry/build-script coverage remain unfinished.
+
+This branch mounts the immutable worker request as a native File input instead
+of writing it into the container root filesystem. Compiler results and native
+incremental directories keep their existing layout. The request remains in the
+execution cache key.
+
+In five alternating 102-crate pairs, leaf/shared command medians change from
+0.878/1.409 s to 0.850/1.351 s. Three of five pairs improve in each scenario;
+host CPU/I/O pressure and overlapping ranges limit attribution. Keep this as
+an experiment. The ownership waits persist and overlap snapshot preparation.
+Details are in the Dagger fork's `hack/rust-cache/NATIVE_SNAPSHOT_LEASES.md`.

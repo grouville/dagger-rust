@@ -66,7 +66,7 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 		WithMountedDirectory(model.SourceRoot, workspace).
 		WithMountedDirectory(worker.OutputRoot, state).
 		WithMountedFile(worker.Root+"/runner", opts.BatchCompiler).
-		WithNewFile(worker.Root+"/request.json", string(contents), dagger.ContainerWithNewFileOpts{Permissions: 0600}).
+		WithMountedFile(worker.Root+"/request.json", client.File("request.json", string(contents), dagger.FileOpts{Permissions: 0600})).
 		WithExec([]string{worker.Root + "/runner", "worker", worker.Root + "/request.json"}, noNesting())
 	graph := &Graph{results: map[string]*dagger.Directory{}, BatchTrace: container.File(worker.Root + "/timings.json")}
 	for _, action := range actions {
