@@ -40,7 +40,7 @@ type NativeCompilation {
 type Rust {
   """Debian bookworm amd64 Rust image. The default is pinned by digest."""
   pub image: String! = "rust@sha256:39f68a3e8e3ff425f8945ffa91128e60ff930d53e17fbb5214e95824bdd46f1b"
-  """Prefix of this project's cache volumes. Use a distinct value per project."""
+  """Project cache key. Use a distinct value per project."""
   pub cacheKey: String! = "rust"
   """Pass --locked to Cargo and require an up-to-date Cargo.lock."""
   pub locked: Boolean! = false
@@ -62,7 +62,7 @@ type Rust {
   pub compilerPlan: File
   """Previous native compiler cache, retained or transferred as a Dagger object."""
   pub compilerCache: NativeCache
-  """Use the experimental native backend for normal checks, with automatic plan selection."""
+  """Use the experimental native backend for normal checks, recovering this project's previous cache."""
   pub nativeCache: Boolean! = false
 
   # Runs once in the cached toolchain layer and records whether Cargo supports
@@ -212,8 +212,22 @@ type Rust {
       locked and extraPackages.isEmpty
     }
     let retained = previous ?? compilerCache
+    let hintKey = cacheKey + "-native-check"
+    let hintID = if (retained == null) { Dagger.nativeCacheHint(key: hintKey) } else { null }
     let previousFields = if (retained == null) {
-      NativeCache(manifest: "", tokens: [], snapshots: [])
+      if (hintID == null) {
+        NativeCache(manifest: "", tokens: [], snapshots: [])
+      } else {
+        let stored = node(hintID!).{{... on RustCompilerCache!}}.{{
+          plan.{{id}}, manifest, tokens, snapshots.{{id}}
+        }}
+        NativeCache(
+          plan: node(stored.plan.id!).{{... on File!}},
+          manifest: stored.manifest,
+          tokens: stored.tokens,
+          snapshots: stored.snapshots.map { snapshot => node(snapshot.id!).{{... on Directory!}} },
+        )
+      }
     } else {
       retained
     }
@@ -222,9 +236,12 @@ type Rust {
       previousManifest: previousFields.manifest, previousTokens: previousFields.tokens, previousSnapshots: previousFields.snapshots,
       workers: 8, command: "check", cargoFlags: cargoFlags, image: image).{{
         artifacts.{{id}},
-        cache.{{plan.{{id}}, manifest, tokens, snapshots.{{id}}}},
+        cache.{{id, plan.{{id}}, manifest, tokens, snapshots.{{id}}}},
         hits, actions
       }}
+    assert("Failed to retain the native compiler cache") {
+      Dagger.saveNativeCacheHint(key: hintKey, value: compiled.cache.id!)
+    }
     NativeCompilation(
       artifacts: node(compiled.artifacts.id!).{{... on Directory!}},
       cache: NativeCache(
@@ -255,7 +272,7 @@ type Rust {
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
     previous: NativeCache,
-  ): NativeCompilation! {
+  ): NativeCompilation! @cache(policy: FunctionCachePolicy.Never) {
     nativeCheckResult(source, previous)
   }
 
@@ -342,7 +359,7 @@ type Rust {
   pub check(
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
-  ): Void @check {
+  ): Void @check @cache(policy: FunctionCachePolicy.Never) {
     if (compilerPlan == null and nativeCache == false) {
       checkResult(source).sync
     } else {

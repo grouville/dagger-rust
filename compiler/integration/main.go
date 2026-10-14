@@ -51,6 +51,8 @@ func main() {
 func run() error {
 	sourcePath := flag.String("source", "", "Cargo workspace used by this integration fixture")
 	automaticPlan := flag.Bool("automatic-plan", false, "select plans from the native cache and recapture when Cargo inputs change")
+	automaticCache := flag.Bool("automatic-cache", false, "recover previous native state from the engine without reading or passing cache metadata")
+	cacheKey := flag.String("cache-key", "rust", "project cache key for automatic cache recovery")
 	cacheInConstructor := flag.Bool("cache-in-constructor", false, "use the earlier compilerCache constructor input for comparison")
 	restoreCacheFields := flag.Bool("restore-cache-fields", false, "reconstruct the cache fields on each command for comparison")
 	expectedActions := flag.Int("expected-actions", -1, "expected compiler action count for the check stage; negative disables the assertion")
@@ -60,6 +62,12 @@ func run() error {
 		return fmt.Errorf("usage: integration -source WORKSPACE writer|reader|check|digests STATE_DIRECTORY")
 	}
 	stage, dir := flag.Arg(0), flag.Arg(1)
+	if *automaticCache {
+		if stage != "check" {
+			return fmt.Errorf("automatic-cache is only supported by the check stage")
+		}
+		*automaticPlan = true
+	}
 	ctx := context.Background()
 	client, err := daggerclient.Connect(ctx)
 	if err != nil {
@@ -96,7 +104,7 @@ func run() error {
 		}
 		return nil
 	}
-	rust := base.Select("rust").Arg("image", image).Arg("locked", true)
+	rust := base.Select("rust").Arg("image", image).Arg("locked", true).Arg("cacheKey", *cacheKey)
 	build := func(source *core.Directory, plan, previous core.ID) (*compilation, error) {
 		id, err := source.ID(ctx)
 		if err != nil {
@@ -122,6 +130,20 @@ func run() error {
 		return &result, err
 	}
 	if stage == "check" {
+		if *automaticCache {
+			result, err := build(source, "", "")
+			if err != nil {
+				return err
+			}
+			if *expectedActions >= 0 && result.Actions != *expectedActions {
+				return fmt.Errorf("got %d actions, expected %d", result.Actions, *expectedActions)
+			}
+			if *expectedHits >= 0 && result.Hits != *expectedHits {
+				return fmt.Errorf("got %d hits, expected %d", result.Hits, *expectedHits)
+			}
+			fmt.Printf("automatic cache actions=%d hits=%d\n", result.Actions, result.Hits)
+			return nil
+		}
 		// Each invocation imports a fresh host snapshot. Retain only metadata
 		// and native Directory IDs on this engine; never export compiler state
 		// through the host while measuring edited-command latency.
