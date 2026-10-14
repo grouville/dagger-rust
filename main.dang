@@ -23,6 +23,19 @@ type CargoFinished {
   success: Boolean!
 }
 
+type NativeCache {
+  pub manifest: String!
+  pub tokens: [String!]!
+  pub snapshots: [Directory!]!
+}
+
+type NativeCompilation {
+  pub artifacts: Directory!
+  pub cache: NativeCache!
+  pub hits: Int!
+  pub actions: Int!
+}
+
 type Rust {
   """Debian bookworm amd64 Rust image. The default is pinned by digest."""
   pub image: String! = "rust@sha256:39f68a3e8e3ff425f8945ffa91128e60ff930d53e17fbb5214e95824bdd46f1b"
@@ -43,6 +56,11 @@ type Rust {
   pub features: [String!]! = []
   pub allFeatures: Boolean! = false
   pub noDefaultFeatures: Boolean! = false
+
+  """Experimental native compiler plan for `cargo check`. Capture it with captureCheckPlan."""
+  pub compilerPlan: File
+  """Previous native compiler cache, retained or transferred as a Dagger object."""
+  pub compilerCache: NativeCache
 
   # Runs once in the cached toolchain layer and records whether Cargo supports
   # build.build-dir (>= 1.91). Newer toolchains keep the mutable intermediate
@@ -186,6 +204,56 @@ type Rust {
     action("check", source, ["cargo", "check"] + cargoFlags)
   }
 
+  let nativeCheckResult(source: Directory!): NativeCompilation! {
+    assert("A compiler plan is required for native compilation") { compilerPlan != null }
+    assert("The experimental compiler backend requires a locked workspace and no extra packages") {
+      locked and extraPackages.isEmpty
+    }
+    let previous = if (compilerCache == null) {
+      null
+    } else {
+      rustCompiler.restore(compilerCache.manifest, compilerCache.tokens, compilerCache.snapshots)
+    }
+    let compiled = rustCompiler.compile(source, plan: compilerPlan, previous: previous, workers: 8,
+      command: "check", cargoFlags: cargoFlags, image: image)
+    NativeCompilation(
+      artifacts: compiled.artifacts,
+      cache: NativeCache(
+        manifest: compiled.cache.manifest,
+        tokens: compiled.cache.tokens,
+        snapshots: compiled.cache.snapshots.{{id}}.map { snapshot => node(snapshot.id).{{... on Directory!}} },
+      ),
+      hits: compiled.hits,
+      actions: compiled.actions,
+    )
+  }
+
+  """Capture the compiler graph for a locked, path-only workspace. Recapture when Cargo configuration changes."""
+  pub captureCheckPlan(
+    source: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+  ): File! {
+    assert("The experimental compiler backend requires a locked workspace and no extra packages") {
+      locked and extraPackages.isEmpty
+    }
+    rustCompiler.capture(source, image: image, command: "check",
+      cargoArgs: cargoFlags.filter { flag => flag != "--workspace" and flag != "--locked" })
+  }
+
+  """Type-check and return the native artifacts and cache for the next source edit."""
+  pub nativeCheck(
+    source: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+  ): NativeCompilation! {
+    nativeCheckResult(source)
+  }
+
+  """Reconstruct a transferred cache with this engine's native directories."""
+  pub restoreCompilerCache(manifest: String!, tokens: [String!]!, snapshots: [Directory!]!): NativeCache! {
+    assert("Compiler cache tokens and snapshots must match") { tokens.length == snapshots.length }
+    NativeCache(manifest: manifest, tokens: tokens, snapshots: snapshots)
+  }
+
   let buildResult(source: Directory!): Container! {
     let script = if (locked) {
       "set -eu; cargo build --message-format=json-render-diagnostics \"$@\" > /meta/build.jsonl; cargo metadata --no-deps --format-version=1 --locked > /meta/workspace.json\n" + publishLegacyArtifacts
@@ -264,7 +332,11 @@ type Rust {
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
   ): Void @check {
-    checkResult(source).sync
+    if (compilerPlan == null) {
+      checkResult(source).sync
+    } else {
+      nativeCheckResult(source).artifacts.sync
+    }
     null
   }
 

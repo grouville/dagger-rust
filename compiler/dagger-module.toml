@@ -1,0 +1,8 @@
+name = "rust-compiler"
+engineVersion = "v1.0.0-0"
+
+[runtime]
+  source = "go"
+
+[codegen]
+  automaticGitignore = false
