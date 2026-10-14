@@ -250,7 +250,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		for _, publication := range recipe.Publications {
 			target = target.WithFile(publication.Path, graph.Artifacts.File(strings.TrimPrefix(publication.Output, model.TargetRoot+"/")))
 		}
-		run, err := replay.TestExecution(query, &recipe, native, target)
+		run, err := replay.TestExecution(query, &recipe, native, target, core.Ref[*core.File](query, core.ID(runner)))
 		if err != nil {
 			return nil, err
 		}
