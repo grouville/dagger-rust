@@ -50,6 +50,23 @@ func parseMetadata(contents string) ([]model.Package, error) {
 
 // Validate checks both the supported boundary and the graph before any replay.
 func Validate(plan *model.Plan, source Source) error {
+	if plan.ConfigDigest != source.ConfigDigest() {
+		return fmt.Errorf("build configuration changed; recapture after manifest, lockfile or toolchain configuration changes")
+	}
+	return validateGraph(plan)
+}
+
+func validateBuild(plan *model.Plan, source Source, opts BuildOptions) error {
+	if opts.nativeConfigDigest == "" {
+		return Validate(plan, source)
+	}
+	if opts.SourceDirectory == nil || plan.NativeConfigDigest != opts.nativeConfigDigest {
+		return fmt.Errorf("build configuration changed; recapture after manifest, lockfile or toolchain configuration changes")
+	}
+	return validateGraph(plan)
+}
+
+func validateGraph(plan *model.Plan) error {
 	if plan.Version != model.Version {
 		return fmt.Errorf("unsupported plan version %d", plan.Version)
 	}
@@ -58,9 +75,6 @@ func Validate(plan *model.Plan, source Source) error {
 	}
 	if !strings.Contains(plan.Image, "@sha256:") {
 		return fmt.Errorf("plan toolchain image must be pinned by digest")
-	}
-	if plan.ConfigDigest != source.ConfigDigest() {
-		return fmt.Errorf("build configuration changed; recapture after manifest, lockfile or toolchain configuration changes")
 	}
 	if len(plan.Actions) == 0 {
 		return fmt.Errorf("plan contains no compiler actions")

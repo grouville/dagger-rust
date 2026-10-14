@@ -17,17 +17,18 @@ const (
 )
 
 type Plan struct {
-	Version         int               `json:"version"`
-	Image           string            `json:"image"`
-	RustcVersion    string            `json:"rustc_version"`
-	ConfigDigest    string            `json:"config_digest"`
-	CargoArgs       []string          `json:"cargo_args"`
-	CargoCommand    string            `json:"cargo_command,omitempty"`
-	Environment     map[string]string `json:"environment"`
-	Packages        []Package         `json:"packages"`
-	Actions         []Action          `json:"actions"`
-	BaselineDigests map[string]string `json:"baseline_digests"`
-	CaptureSeconds  float64           `json:"capture_seconds"`
+	Version            int               `json:"version"`
+	Image              string            `json:"image"`
+	RustcVersion       string            `json:"rustc_version"`
+	ConfigDigest       string            `json:"config_digest"`
+	NativeConfigDigest string            `json:"native_config_digest,omitempty"`
+	CargoArgs          []string          `json:"cargo_args"`
+	CargoCommand       string            `json:"cargo_command,omitempty"`
+	Environment        map[string]string `json:"environment"`
+	Packages           []Package         `json:"packages"`
+	Actions            []Action          `json:"actions"`
+	BaselineDigests    map[string]string `json:"baseline_digests"`
+	CaptureSeconds     float64           `json:"capture_seconds"`
 }
 
 type Package struct {

@@ -20,13 +20,22 @@ func CaptureNative(ctx context.Context, client *dagger.Query, source *dagger.Dir
 		return nil, err
 	}
 	opts.SourceDirectory = source
-	return Capture(ctx, client, configuration, opts)
+	plan, err := Capture(ctx, client, configuration, opts)
+	if err != nil {
+		return nil, err
+	}
+	plan.NativeConfigDigest, err = nativeConfigurationDirectory(source).Digest(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("hash native Cargo configuration: %w", err)
+	}
+	return plan, nil
 }
 
 // BuildNativeAutomatic accepts a module's immutable source and cache directly.
-// Only Cargo configuration is read into the client to validate the captured plan;
-// compiler inputs and their package hashes come from source itself. The caller
-// excludes .git and target from source and retains Graph.History as a Directory.
+// Cargo configuration is validated in the engine for plans captured natively;
+// legacy plans still export configuration. Compiler inputs and package hashes
+// come from source itself. The caller excludes .git and target from source and
+// retains Graph.History as a Directory.
 func BuildNativeAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan, source *dagger.Directory, opts BuildOptions, previous *dagger.Directory) (*Graph, error) {
 	if source == nil {
 		return nil, fmt.Errorf("native source directory is required")
@@ -34,7 +43,16 @@ func BuildNativeAutomatic(ctx context.Context, client *dagger.Query, plan *model
 	if opts.SourceDirectory != nil {
 		return nil, fmt.Errorf("native source directory must be supplied through source")
 	}
-	configuration, err := nativeConfiguration(ctx, source)
+	var configuration Source
+	var err error
+	if plan.NativeConfigDigest == "" {
+		configuration, err = nativeConfiguration(ctx, source)
+	} else {
+		opts.nativeConfigDigest, err = nativeConfigurationDirectory(source).Digest(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("hash native Cargo configuration: %w", err)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -48,11 +66,15 @@ func nativeConfiguration(ctx context.Context, source *dagger.Directory) (Source,
 		return nil, err
 	}
 	defer os.RemoveAll(local)
-	configuration := source.Filter(dagger.DirectoryFilterOpts{Include: []string{
-		"**/Cargo.toml", "**/Cargo.lock", "**/rust-toolchain", "**/rust-toolchain.toml", "**/.cargo/**",
-	}})
+	configuration := nativeConfigurationDirectory(source)
 	if _, err := configuration.Export(ctx, local); err != nil {
 		return nil, fmt.Errorf("read native Cargo configuration: %w", err)
 	}
 	return ReadSource(local)
+}
+
+func nativeConfigurationDirectory(source *dagger.Directory) *dagger.Directory {
+	return source.Filter(dagger.DirectoryFilterOpts{Include: []string{
+		"**/Cargo.toml", "**/Cargo.lock", "**/rust-toolchain", "**/rust-toolchain.toml", "**/.cargo/**",
+	}})
 }

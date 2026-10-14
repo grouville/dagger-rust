@@ -54,11 +54,12 @@ type BuildOptions struct {
 	SourceDigestPaths bool
 	// BatchCompiler is the rcexp executable, used to schedule cache misses in
 	// one container. Automatic history still retains results separately.
-	BatchCompiler     *dagger.File
-	BatchWorkers      int
-	BatchNoPipelining bool
-	automatic         *automaticInputs
-	nativeCache       *NativeCache
+	BatchCompiler      *dagger.File
+	BatchWorkers       int
+	BatchNoPipelining  bool
+	automatic          *automaticInputs
+	nativeCache        *NativeCache
+	nativeConfigDigest string
 }
 
 type ActionReport struct {
@@ -98,7 +99,7 @@ func Build(client *dagger.Query, plan *model.Plan, source Source) (*Graph, error
 }
 
 func BuildWithOptions(client *dagger.Query, plan *model.Plan, source Source, opts BuildOptions) (*Graph, error) {
-	if err := Validate(plan, source); err != nil {
+	if err := validateBuild(plan, source, opts); err != nil {
 		return nil, err
 	}
 	if opts.BatchCompiler != nil {

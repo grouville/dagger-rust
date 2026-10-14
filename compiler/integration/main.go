@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 
 	daggerclient "dagger.io/dagger"
 	core "dagger.io/dagger/core"
@@ -223,6 +224,33 @@ func run() error {
 		}
 		if reverted.Hits != 4 {
 			return fmt.Errorf("reversion reused %d/4", reverted.Hits)
+		}
+		for _, filename := range []string{"Cargo.toml", "Cargo.lock", ".cargo/config.toml", "rust-toolchain.toml"} {
+			contents := "# added configuration\n"
+			if filename == "Cargo.toml" || filename == "Cargo.lock" {
+				original, err := source.File(filename).Contents(ctx)
+				if err != nil {
+					return err
+				}
+				contents = original + "\n# changed configuration\n"
+			}
+			_, err := build(source.WithNewFile(filename, contents), planID, reverted.Cache.ID)
+			if err == nil || !strings.Contains(err.Error(), "build configuration changed; recapture") {
+				return fmt.Errorf("configuration change %s was not rejected: %v", filename, err)
+			}
+		}
+		modeChange := source.WithFile("Cargo.toml", source.File("Cargo.toml"), core.DirectoryWithFileOpts{Permissions: 0600})
+		stat, err := modeChange.Stat(ctx, "Cargo.toml")
+		if err != nil {
+			return err
+		}
+		permissions, err := stat.Permissions(ctx)
+		if err != nil || permissions != 0600 {
+			return fmt.Errorf("configuration mode fixture has permissions %o: %v", permissions, err)
+		}
+		_, err = build(modeChange, planID, reverted.Cache.ID)
+		if err == nil || !strings.Contains(err.Error(), "build configuration changed; recapture") {
+			return fmt.Errorf("configuration permission change was not rejected: %v", err)
 		}
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err

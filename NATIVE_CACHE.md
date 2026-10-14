@@ -67,3 +67,18 @@ module passes the 102-action fanout fixture: cold 0/102 reuse, leaf edit
 fails without publishing new cache metadata. This extends performance
 measurement beyond the four-crate fixture; automatic cache discovery and
 real registry/build-script coverage remain unfinished.
+
+This branch records a native configuration-directory digest when capturing a
+plan. Subsequent edits validate that digest in the engine instead of exporting
+configuration files into the helper. Old plans keep their original validation
+path. The original content/mode digest remains in compiler identities; the new
+field does not change incremental-seed compatibility or compiler-result keys.
+The integration writer also rejects manifest, lockfile, Cargo config, toolchain
+config and permission changes.
+
+Keep this as an experiment. The initial 102-crate comparison improved leaf
+and shared medians, but a comparison using the same code, worker and initial
+snapshots gives mixed results: leaf 0.956 to 0.988 s and shared 1.519 to 1.481 s.
+Configuration exports disappear from profiles; a complete-command improvement
+is not yet established. The measurements and limitations are in the Dagger
+fork's `hack/rust-cache/NATIVE_CONFIGURATION.md`.

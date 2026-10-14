@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	dagger "dagger.io/dagger/core"
 	"github.com/grouville/dagger-rust/compiler/model"
 )
 
@@ -47,6 +48,40 @@ func TestConfigurationAndSourceEdits(t *testing.T) {
 	source["a/Cargo.toml"] = SourceFile{Contents: "changed manifest", Mode: 0644}
 	if err := Validate(plan, source); err == nil || !strings.Contains(err.Error(), "recapture") {
 		t.Fatalf("expected recapture, got %v", err)
+	}
+}
+
+func TestNativeConfigurationValidation(t *testing.T) {
+	plan, source := testPlan()
+	plan.NativeConfigDigest = "captured native configuration"
+	opts := BuildOptions{SourceDirectory: &dagger.Directory{}, nativeConfigDigest: plan.NativeConfigDigest}
+	if err := validateBuild(plan, nil, opts); err != nil {
+		t.Fatal("native configuration should not require exported files:", err)
+	}
+	if len(plan.Actions[0].Dependencies) != 1 || plan.Actions[0].Dependencies[0] != "a" {
+		t.Fatal("native validation did not derive the dependency graph")
+	}
+	for name, options := range map[string]BuildOptions{
+		"changed configuration": {SourceDirectory: opts.SourceDirectory, nativeConfigDigest: "changed"},
+		"missing native source": {nativeConfigDigest: plan.NativeConfigDigest},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateBuild(plan, nil, options); err == nil || !strings.Contains(err.Error(), "recapture") {
+				t.Fatalf("expected configuration error, got %v", err)
+			}
+		})
+	}
+	plan.Actions[1].Args = append(plan.Actions[1].Args, "--extern=b=/target/libb.rlib")
+	if err := validateBuild(plan, nil, opts); err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("native validation accepted a dependency cycle: %v", err)
+	}
+	legacy, _ := testPlan()
+	if err := validateBuild(legacy, source, BuildOptions{}); err != nil {
+		t.Fatal("legacy configuration validation failed:", err)
+	}
+	source["a/Cargo.toml"] = SourceFile{Contents: "changed manifest", Mode: 0644}
+	if err := validateBuild(legacy, source, BuildOptions{}); err == nil || !strings.Contains(err.Error(), "recapture") {
+		t.Fatalf("legacy validation accepted a configuration change: %v", err)
 	}
 }
 

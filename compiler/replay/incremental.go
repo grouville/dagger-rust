@@ -49,6 +49,8 @@ func SeedCompatibility(plan *model.Plan, crate string) (string, error) {
 
 func recipeConfiguration(plan *model.Plan) model.Plan {
 	configuration := *plan
+	// This validates the native source without changing compiler identities.
+	configuration.NativeConfigDigest = ""
 	configuration.Actions = slices.Clone(plan.Actions)
 	configuration.BaselineDigests = nil
 	configuration.CaptureSeconds = 0

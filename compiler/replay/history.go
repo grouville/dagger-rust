@@ -133,7 +133,7 @@ func targetRelative(filename string) string {
 // claiming to contain compiler results. Callers retain/transfer History as a
 // native Directory. A local ID file alone is neither portable nor a remote index.
 func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan, source Source, opts BuildOptions, previous *dagger.Directory) (*Graph, error) {
-	if err := Validate(plan, source); err != nil {
+	if err := validateBuild(plan, source, opts); err != nil {
 		return nil, err
 	}
 	if opts.IncrementalCrate != "" || opts.IncrementalSeed != nil || opts.ArtifactLeafFiles != 0 {
