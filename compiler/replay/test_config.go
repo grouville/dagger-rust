@@ -25,6 +25,9 @@ func validateTestConfig(contents string) error {
 	if err != nil {
 		return fmt.Errorf("read Cargo test configuration: %w", err)
 	}
+	if configuration.Has("build.rustdoc") || configuration.Has("env.RUSTDOC") || configuration.Has("env.CARGO_BUILD_RUSTDOC") {
+		return fmt.Errorf("native test capture does not yet support rustdoc overrides in Cargo configuration")
+	}
 	targets, ok := configuration.Get("target").(*toml.Tree)
 	if !ok {
 		return nil

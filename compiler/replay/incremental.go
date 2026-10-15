@@ -52,6 +52,8 @@ func recipeConfiguration(plan *model.Plan) model.Plan {
 	// This validates the native source without changing compiler identities.
 	configuration.NativeConfigDigest = ""
 	configuration.NativeSourcePaths = nil
+	// The documentation-test launcher does not affect compiler results or seeds.
+	configuration.Rustdoc = ""
 	configuration.Actions = slices.Clone(plan.Actions)
 	configuration.BaselineDigests = nil
 	configuration.CaptureSeconds = 0

@@ -20,6 +20,7 @@ type Plan struct {
 	Version            int               `json:"version"`
 	Image              string            `json:"image"`
 	RustcVersion       string            `json:"rustc_version"`
+	Rustdoc            string            `json:"rustdoc,omitempty"`
 	ConfigDigest       string            `json:"config_digest"`
 	NativeConfigDigest string            `json:"native_config_digest,omitempty"`
 	NativeSourcePaths  []string          `json:"native_source_paths,omitempty"`

@@ -30,3 +30,16 @@ func TestNativePlanOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeTestPlanNeedsSelectedRustdoc(t *testing.T) {
+	plan, _ := testPlan()
+	plan.CargoCommand = "test"
+	opts := CaptureOptions{Image: plan.Image, Command: "test", CargoArgs: plan.CargoArgs}
+	if planOptionsMatch(plan, opts) {
+		t.Fatal("an old test plan must be refreshed to record its rustdoc program")
+	}
+	plan.Rustdoc = "/toolchain/bin/rustdoc"
+	if !planOptionsMatch(plan, opts) {
+		t.Fatal("a matching test plan should be reused")
+	}
+}

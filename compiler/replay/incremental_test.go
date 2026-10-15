@@ -25,6 +25,7 @@ func TestIncrementalSeedCompatibility(t *testing.T) {
 	plan.BaselineDigests = map[string]string{"/target/liba.rlib": "changed"}
 	plan.NativeConfigDigest = "native configuration validation metadata"
 	plan.NativeSourcePaths = []string{"new/source.rs"}
+	plan.Rustdoc = "/selected/toolchain/bin/rustdoc"
 	if err := seed.Validate(plan, "a"); err != nil {
 		t.Fatal(err)
 	}

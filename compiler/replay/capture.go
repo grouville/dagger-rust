@@ -89,6 +89,7 @@ func Capture(ctx context.Context, client *dagger.Query, source Source, opts Capt
 	}
 	args := append([]string{"cargo", opts.Command}, CargoFlags(opts.CargoArgs)...)
 	args = append(args, "--offline", "--message-format=json-render-diagnostics")
+	var rustdoc string
 	if opts.Command == "test" {
 		if opts.TestRecorder == nil {
 			return nil, fmt.Errorf("test command recorder is required")
@@ -103,8 +104,23 @@ func Capture(ctx context.Context, client *dagger.Query, source Source, opts Capt
 		if err := validateImageTestConfiguration(ctx, ctr); err != nil {
 			return nil, err
 		}
+		selected, err := ctr.WithMountedFile("/opt/test-recorder", opts.TestRecorder).
+			WithExec([]string{"/opt/test-recorder", "--resolve-rustdoc"}, noNesting()).Stdout(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("resolve captured rustdoc: %w", err)
+		}
+		if err := json.Unmarshal([]byte(selected), &rustdoc); err != nil {
+			return nil, fmt.Errorf("decode selected rustdoc: %w", err)
+		}
+		if rustdoc == "" || validateRustdocPath(rustdoc) != nil {
+			return nil, fmt.Errorf("rustdoc must come from the pinned toolchain image")
+		}
+		if _, err := base.File(rustdoc).Digest(ctx); err != nil {
+			return nil, fmt.Errorf("rustdoc %s is absent from the pinned image: %w", rustdoc, err)
+		}
 		ctr = ctr.WithMountedFile("/opt/test-recorder", opts.TestRecorder).
 			WithMountedFile("/opt/rustdoc-recorder", opts.TestRecorder).
+			WithEnvVariable("RCE_RUSTDOC", rustdoc).
 			WithEnvVariable("RUSTDOC", "/opt/rustdoc-recorder")
 		args = append(args, "--config", `target.x86_64-unknown-linux-gnu.runner="/opt/test-recorder"`)
 	}
@@ -117,7 +133,7 @@ func Capture(ctx context.Context, client *dagger.Query, source Source, opts Capt
 	if err != nil {
 		return nil, fmt.Errorf("Cargo capture failed: %w", err)
 	}
-	plan := &model.Plan{Version: model.Version, Image: image, RustcVersion: rustcVersion, ConfigDigest: source.ConfigDigest(), CargoArgs: opts.CargoArgs, CargoCommand: opts.Command, Environment: opts.Environment, Packages: packages, BaselineDigests: map[string]string{}}
+	plan := &model.Plan{Version: model.Version, Image: image, RustcVersion: rustcVersion, Rustdoc: rustdoc, ConfigDigest: source.ConfigDigest(), CargoArgs: opts.CargoArgs, CargoCommand: opts.Command, Environment: opts.Environment, Packages: packages, BaselineDigests: map[string]string{}}
 	for _, name := range names {
 		if !strings.HasSuffix(name, ".json") {
 			continue

@@ -69,6 +69,13 @@ in Cargo order so filesystem changes reach later commands. Test execution has
 its own inputs: a runtime-only file edit can reuse every compiler result and
 still fail a test. Configured target runners are rejected by this prototype.
 
+Native test plans retain the selected `rustdoc` executable from the pinned image.
+Rustup selects that binary once during capture; replay uses it directly for each
+documentation test. This preserves test execution and avoids repeated toolchain
+selection. Old automatic test plans refresh once, and explicit older plans remain
+usable. Rustdoc overrides in Cargo configuration are rejected; image environment
+overrides are retained.
+
 `dagger generate -y` publishes Cargo's final workspace binaries and libraries
 under `target/dagger`. It disables rustc incremental compilation to keep these
 generated files reproducible across engines. The `nativeBuild` API retains

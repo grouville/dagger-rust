@@ -6,15 +6,18 @@ import (
 	"github.com/grouville/dagger-rust/compiler/model"
 )
 
-func TestTestCaptureDoesNotReplaceConfiguredRunner(t *testing.T) {
+func TestTestCaptureDoesNotReplaceConfiguredCommands(t *testing.T) {
 	for _, config := range []string{
 		`[target.x86_64-unknown-linux-gnu]
 runner = "custom-runner"`,
 		`[target.'cfg(unix)']
 runner = ["custom-runner", "--flag"]`,
+		"[build]\nrustdoc = 'custom-rustdoc'",
+		"[env]\nRUSTDOC = 'custom-rustdoc'",
+		"[env]\nCARGO_BUILD_RUSTDOC = { value = 'custom-rustdoc', force = true }",
 	} {
 		if err := validateTestConfiguration(Source{".cargo/config.toml": {Contents: config}}); err == nil {
-			t.Fatal("silently replaced a configured Cargo runner")
+			t.Fatal("silently replaced a configured Cargo command")
 		}
 	}
 	if err := validateTestConfiguration(Source{".cargo/config.toml": {Contents: "# runner is documented here\n[build]\njobs = 2"}}); err != nil {

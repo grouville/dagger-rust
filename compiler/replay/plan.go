@@ -67,6 +67,9 @@ func validateBuild(plan *model.Plan, source Source, opts BuildOptions) error {
 }
 
 func validateGraph(plan *model.Plan) error {
+	if err := validateRustdocPath(plan.Rustdoc); err != nil {
+		return err
+	}
 	if plan.Version != model.Version {
 		return fmt.Errorf("unsupported plan version %d", plan.Version)
 	}

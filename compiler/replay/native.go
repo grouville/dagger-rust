@@ -68,6 +68,9 @@ func planOptionsMatch(plan *model.Plan, opts CaptureOptions) bool {
 	if command == "" {
 		command = "build"
 	}
+	if command == "test" && plan.Rustdoc == "" {
+		return false // Older captures did not retain the selected rustdoc program.
+	}
 	return plan.Version == model.Version && plan.Image == opts.Image && command == opts.Command &&
 		slices.Equal(plan.CargoArgs, opts.CargoArgs) && len(plan.Environment) == 0
 }

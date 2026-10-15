@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
+	"slices"
 
 	dagger "dagger.io/dagger/core"
 	"github.com/grouville/dagger-rust/compiler/model"
@@ -21,13 +22,11 @@ func TestExecution(client *dagger.Query, plan *model.Plan, source, target *dagge
 	if runner == nil {
 		return nil, fmt.Errorf("native test execution requires its runner")
 	}
-	for _, command := range plan.Tests {
-		if !model.Within(model.SourceRoot, command.Cwd) || path.Clean(command.Cwd) != command.Cwd ||
-			(command.Executable != "rustdoc" && (!model.Within(model.TargetRoot, command.Executable) || path.Clean(command.Executable) != command.Executable)) {
-			return nil, fmt.Errorf("invalid captured test command")
-		}
+	commands, err := testCommands(plan)
+	if err != nil {
+		return nil, err
 	}
-	contents, err := json.Marshal(plan.Tests)
+	contents, err := json.Marshal(commands)
 	if err != nil {
 		return nil, err
 	}
@@ -36,4 +35,29 @@ func TestExecution(client *dagger.Query, plan *model.Plan, source, target *dagge
 		WithMountedFile(worker.Root+"/runner", runner).
 		WithNewFile(worker.Root+"/tests.json", string(contents), dagger.ContainerWithNewFileOpts{Permissions: 0600}).
 		WithExec([]string{worker.Root + "/runner", "tests", worker.Root + "/tests.json"}, noNesting()), nil
+}
+
+func testCommands(plan *model.Plan) ([]model.TestCommand, error) {
+	if err := validateRustdocPath(plan.Rustdoc); err != nil {
+		return nil, err
+	}
+	commands := slices.Clone(plan.Tests)
+	for i, command := range commands {
+		if !model.Within(model.SourceRoot, command.Cwd) || path.Clean(command.Cwd) != command.Cwd ||
+			(command.Executable != "rustdoc" && (!model.Within(model.TargetRoot, command.Executable) || path.Clean(command.Executable) != command.Executable)) {
+			return nil, fmt.Errorf("invalid captured test command")
+		}
+		if command.Executable == "rustdoc" && plan.Rustdoc != "" {
+			commands[i].Executable = plan.Rustdoc
+		}
+	}
+	return commands, nil
+}
+
+func validateRustdocPath(program string) error {
+	if program != "" && (!path.IsAbs(program) || path.Clean(program) != program ||
+		model.Within(model.SourceRoot, program) || model.Within(model.TargetRoot, program)) {
+		return fmt.Errorf("rustdoc must come from the pinned toolchain image")
+	}
+	return nil
 }
