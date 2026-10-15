@@ -14,6 +14,13 @@ type CargoPackage {
   name: String!
 }
 
+type PackageMetadata {
+  fingerprint: String!
+  toolchain: String!
+  locked: Boolean!
+  names: [String!]!
+}
+
 type CargoTarget {
   kind: [String!]!
 }
@@ -189,22 +196,86 @@ type Rust {
     self
   }
 
+  let queryPackageNames(prepared: Container!, source: Directory!): [String!]! {
+    let flags = ["cargo", "metadata", "--offline", "--no-deps", "--format-version=1"]
+    if (locked) { flags += ["--locked"] }
+    let output = prepared
+      .withMountedDirectory("/src", source).withWorkdir("/src")
+      .withExec(flags, disableDaggerInDagger: true).stdout
+    let metadata: CargoWorkspace! = JSON.decode(output)
+    # --no-deps returns workspace members only.
+    metadata.packages.map { package => package.name }
+  }
+
+  # The experiment fingerprints file layout and non-Rust contents in one
+  # execution. Hash link destinations and permissions as well as names.
+  # An unsupported find/checksum utility yields no fingerprint and falls back.
+  let packageFingerprint: String! = """
+    set -eu
+    # Cargo configuration can include arbitrary files or source-based tools.
+    # Keep those projects on Cargo's existing discovery path for now.
+    cargo_config=$(find . -name .cargo -print -quit) || exit 0
+    if [ -n "$cargo_config" ]; then exit 0; fi
+    metadata_tmp=$(mktemp -d /tmp/dagger-package-metadata.XXXXXXXX) || exit 0
+    trap 'rm -rf "$metadata_tmp"' EXIT
+    if ! find . -printf '%P\0%y\0%m\0%U\0%G\0%l\0' > "$metadata_tmp/layout"; then
+      exit 0
+    fi
+    if ! find . \( -type f -o -type l \) ! -name '*.rs' -exec sha256sum -b -z -- '{}' + > "$metadata_tmp/contents"; then
+      exit 0
+    fi
+    layout_sum=$(sha256sum "$metadata_tmp/layout") || exit 0
+    set -- $layout_sum
+    layout_digest=$1
+    contents_sum=$(sha256sum "$metadata_tmp/contents") || exit 0
+    set -- $contents_sum
+    contents_digest=$1
+    fingerprint_sum=$(printf '%s\0%s\0' "$layout_digest" "$contents_digest" | sha256sum) || exit 0
+    set -- $fingerprint_sum
+    printf '%s' "$1"
+  """
+
+  let cachedPackageNames(prepared: Container!, source: Directory!): [String!]! {
+    let fingerprint = prepared
+      .withMountedDirectory("/src", source).withWorkdir("/src")
+      .withExec(["sh", "-c", packageFingerprint], disableDaggerInDagger: true).stdout
+    if (fingerprint == "") {
+      return queryPackageNames(prepared, source)
+    }
+    let toolchainID = prepared.id!
+    let hintKey = cacheKey + "-package-metadata-v1"
+    let previousID = Dagger.nativeCacheHint(key: hintKey)
+    let previous: PackageMetadata = if (previousID == null) {
+      null
+    } else {
+      JSON.decode(node(previousID!).{{... on File!}}.contents)
+    }
+    if (previous != null and previous!.fingerprint == fingerprint and previous!.toolchain == toolchainID and previous!.locked == locked) {
+      return previous!.names
+    }
+    let names = queryPackageNames(prepared, source)
+    let metadata = PackageMetadata(fingerprint: fingerprint, toolchain: toolchainID, locked: locked, names: names)
+    let saved = directory.withNewFile("packages.json", JSON.encode(metadata)).file("packages.json")
+    assert("Failed to retain package metadata") {
+      Dagger.saveNativeCacheHint(key: hintKey, value: saved.id!)
+    }
+    names
+  }
+
   """Select workspace packages; checks run once for the selected group."""
   packages(
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
   ): Packages! {
-    let flags = ["cargo", "metadata", "--offline", "--no-deps", "--format-version=1"]
-    if (locked) { flags += ["--locked"] }
     # Metadata runs no build scripts and needs no source reconciliation.
     # Preserve explicitly requested system packages for project tooling.
     let base = if (extraPackages.isEmpty) { container.from(image) } else { toolchain }
-    let output = configuredToolchain(base, source)
-      .withMountedDirectory("/src", source).withWorkdir("/src")
-      .withExec(flags, disableDaggerInDagger: true).stdout
-    let metadata: CargoWorkspace! = JSON.decode(output)
-    # --no-deps returns workspace members only.
-    let names = metadata.packages.map { package => package.name }
+    let prepared = configuredToolchain(base, source)
+    let names = if (nativeCache) {
+      cachedPackageNames(prepared, source)
+    } else {
+      queryPackageNames(prepared, source)
+    }
     Packages(project: self, source: source, names: names)
   }
 
