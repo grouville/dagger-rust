@@ -115,9 +115,9 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	}
 	var recipe model.Plan
 	if plan != nil {
-		contents, readErr := plan.Contents(ctx)
+		contents, readErr := readCompilerPlan(ctx, plan)
 		if readErr == nil {
-			readErr = json.Unmarshal([]byte(contents), &recipe)
+			readErr = json.Unmarshal(contents, &recipe)
 		}
 		if readErr != nil && !automaticPlan {
 			return nil, fmt.Errorf("read compiler plan: %w", readErr)
