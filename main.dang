@@ -152,7 +152,7 @@ type Rust {
     let prepared = if (config.entries.isEmpty) {
       configured
     } else {
-      configured.withExec(["rustup", "toolchain", "install", "--no-self-update"])
+      configured.withExec(["sh", "-c", "rustup show active-toolchain || rustup toolchain install --no-self-update"])
     }
     let equipped = if (components.isEmpty) {
       prepared
