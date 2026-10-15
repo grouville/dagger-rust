@@ -143,12 +143,10 @@ type Rust {
       .withExec(["sh", "-c", "test \"$(dpkg --print-architecture)\" = amd64 && dpkg -i /tmp/libpopt0.deb /tmp/rsync.deb /tmp/make.deb"])
   }
 
-  # Keyed by the project's root toolchain files and the requested components
-  # only, so source edits never rebuild it. rustup honors rust-toolchain(.toml)
-  # while it is mounted, then the mount is dropped.
-  let projectToolchain(source: Directory!, components: [String!]! = []): Container! {
+  # Keep the project config mounted while selecting Rust and its components.
+  let configuredToolchain(base: Container!, source: Directory!, components: [String!]! = []): Container! {
     let config = source.filter(include: ["rust-toolchain", "rust-toolchain.toml"])
-    let configured = toolchain
+    let configured = base
       .withWorkdir("/src")
       .withMountedDirectory("/src", config)
     let prepared = if (config.entries.isEmpty) {
@@ -163,7 +161,14 @@ type Rust {
       # selected toolchain, not the image's possibly different default.
       prepared.withExec(["rustup", "component", "add"] + components)
     }
-    equipped.withExec(["sh", "-c", cargoLayoutProbe]).withoutMount("/src")
+    equipped
+  }
+
+  # Source edits do not rebuild this layer. Probe Cargo with the project
+  # toolchain still selected, then remove the config mount.
+  let projectToolchain(source: Directory!, components: [String!]! = []): Container! {
+    configuredToolchain(toolchain, source, components)
+      .withExec(["sh", "-c", cargoLayoutProbe]).withoutMount("/src")
   }
 
   let cargoFlags: [String!]! {
@@ -191,7 +196,10 @@ type Rust {
   ): Packages! {
     let flags = ["cargo", "metadata", "--offline", "--no-deps", "--format-version=1"]
     if (locked) { flags += ["--locked"] }
-    let output = projectToolchain(source)
+    # Metadata runs no build scripts and needs no source reconciliation.
+    # Preserve explicitly requested system packages for project tooling.
+    let base = if (extraPackages.isEmpty) { container.from(image) } else { toolchain }
+    let output = configuredToolchain(base, source)
       .withMountedDirectory("/src", source).withWorkdir("/src")
       .withExec(flags, disableDaggerInDagger: true).stdout
     let metadata: CargoWorkspace! = JSON.decode(output)
