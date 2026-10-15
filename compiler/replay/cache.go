@@ -37,6 +37,13 @@ func BuildNativeCached(ctx context.Context, client *dagger.Query, plan *model.Pl
 	if previous != nil {
 		input = *previous
 	}
+	if opts.ConfigGuard == nil {
+		var err error
+		opts.ConfigGuard, err = ConfigurationGuardFromManifest(input.Manifest)
+		if err != nil {
+			return nil, err
+		}
+	}
 	opts.nativeCache = &input
 	return BuildNativeAutomatic(ctx, client, plan, source, opts, nil)
 }

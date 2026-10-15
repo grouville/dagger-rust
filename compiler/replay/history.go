@@ -71,6 +71,7 @@ type historyEntry struct {
 }
 
 type historyManifest struct {
+	ConfigGuard  *ConfigurationGuard       `json:"native_configuration,omitempty"`
 	Version      int                       `json:"version"`
 	Actions      map[string][]historyEntry `json:"actions"`
 	CurrentBatch string                    `json:"current_batch,omitempty"`
@@ -221,7 +222,7 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 	var missingOutputs []string
 	closures := map[string][]string{}
 	keys := map[string]string{}
-	next := historyManifest{Version: historyVersion, Actions: map[string][]historyEntry{}}
+	next := historyManifest{Version: historyVersion, Actions: map[string][]historyEntry{}, ConfigGuard: opts.ConfigGuard}
 	for _, action := range actions {
 		outputSet := map[string]bool{}
 		for _, output := range action.Outputs {

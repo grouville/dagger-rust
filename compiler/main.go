@@ -109,6 +109,10 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		return nil, fmt.Errorf("compiler plan is required")
 	}
 	query := nativeQuery()
+	configGuard, err := replay.ConfigurationGuardFromManifest(previousManifest)
+	if err != nil {
+		return nil, err
+	}
 	native, err := nativeDirectory(ctx, query, source)
 	if err != nil {
 		return nil, err
@@ -142,10 +146,11 @@ func (m *RustCompiler) Compile(ctx context.Context,
 			return nil, err
 		}
 		opts := replay.CaptureOptions{Image: resolvedImage, Command: command, CargoArgs: args}
-		matches, err := replay.NativePlanMatches(ctx, native, &recipe, opts)
+		matches, refreshedGuard, err := replay.NativePlanMatches(ctx, query, native, &recipe, opts, configGuard)
 		if err != nil {
 			return nil, err
 		}
+		configGuard = refreshedGuard
 		if !matches {
 			wrapper, err := m.tools().File("/out/wrapper").ID(ctx)
 			if err != nil {
@@ -206,7 +211,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	}
 	graph, err := replay.BuildNativeCached(ctx, query, &recipe, native, replay.BuildOptions{
 		BatchCompiler: core.Ref[*core.File](query, core.ID(runner)), BatchWorkers: workers, BatchNoIncremental: noIncremental,
-		SourceDigestPaths: true,
+		SourceDigestPaths: true, ConfigGuard: configGuard,
 	}, retained)
 	if err != nil {
 		return nil, err

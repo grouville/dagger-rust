@@ -52,6 +52,8 @@ type BuildOptions struct {
 	SourceDirectory *dagger.Directory
 	// SourceDigestPaths requires the experimental Directory.digest(path:) API.
 	SourceDigestPaths bool
+	// ConfigGuard is validated against the current native entries before use.
+	ConfigGuard *ConfigurationGuard
 	// BatchCompiler is the rcexp executable, used to schedule cache misses in
 	// one container. Automatic history still retains results separately.
 	BatchCompiler      *dagger.File
