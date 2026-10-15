@@ -76,6 +76,10 @@ func Run(ctx context.Context, request Request) ([]Timing, error) {
 		}
 		pending[action.ID], all[action.ID] = action, action
 	}
+	dependencies := make(map[string]model.Action, len(request.Dependencies))
+	for _, action := range request.Dependencies {
+		dependencies[action.ID] = action
+	}
 	complete, metadata := map[string]bool{}, map[string]bool{}
 	events := make(chan event, 2*len(all))
 	var timings []Timing
@@ -90,7 +94,7 @@ func Run(ctx context.Context, request Request) ([]Timing, error) {
 				}
 				delete(pending, id)
 				active++
-				go compile(ctx, action, request.Dependencies, request.Packages, !request.NoIncremental, events)
+				go compile(ctx, action, dependencies, request.Packages, !request.NoIncremental, events)
 			}
 		}
 		if active == 0 {
@@ -173,7 +177,7 @@ func sortedIDs(actions map[string]model.Action) []string {
 	return ids
 }
 
-func compile(ctx context.Context, action model.Action, dependencies []model.Action, packages []model.Package, incremental bool, events chan<- event) {
+func compile(ctx context.Context, action model.Action, dependencies map[string]model.Action, packages []model.Package, incremental bool, events chan<- event) {
 	started := time.Now()
 	private := path.Join(TargetRoot, ".rcexp-private", Token(action.ID))
 	observer := metadataObserver{started: started, notify: func() error {
@@ -266,11 +270,7 @@ func privatePath(private, filename string) string {
 // directory would let a new `extern crate` discover an undeclared library and
 // make the per-crate cache key incomplete. Hard links keep this view cheap;
 // the private tree and published files live on the same mounted filesystem.
-func prepareDependencies(private string, action model.Action, actions []model.Action) error {
-	all := map[string]model.Action{}
-	for _, candidate := range actions {
-		all[candidate.ID] = candidate
-	}
+func prepareDependencies(private string, action model.Action, all map[string]model.Action) error {
 	visited := map[string]bool{}
 	var collect func(string) error
 	collect = func(id string) error {
