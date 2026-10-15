@@ -195,25 +195,34 @@ func packageDigests(ctx context.Context, client *dagger.Query, sourceID dagger.I
 	if len(roots) == 0 {
 		return keys, nil
 	}
-	fields := make([]string, len(roots))
+	fields := make([]string, 0, len(roots))
+	var batchRoots, batchPaths []string
 	for i, root := range roots {
 		projection := projections[root]
-		query := querybuilder.Query().SelectWithAlias(fmt.Sprintf("p%d", i), "directory").Arg("path", projection.path)
 		if directPaths && len(projection.children) == 0 {
-			query = querybuilder.Query().SelectWithAlias(fmt.Sprintf("p%d", i), "digest").Arg("path", projection.path)
-		} else {
-			if len(projection.children) > 1 {
-				query = query.Select("withoutFiles").Arg("paths", projection.children)
-			} else if len(projection.children) == 1 {
-				query = query.Select("withoutDirectory").Arg("path", projection.children[0])
-			}
-			query = query.Select("digest")
+			batchRoots = append(batchRoots, root)
+			batchPaths = append(batchPaths, projection.path)
+			continue
 		}
+		query := querybuilder.Query().SelectWithAlias(fmt.Sprintf("p%d", i), "directory").Arg("path", projection.path)
+		if len(projection.children) > 1 {
+			query = query.Select("withoutFiles").Arg("paths", projection.children)
+		} else if len(projection.children) == 1 {
+			query = query.Select("withoutDirectory").Arg("path", projection.children[0])
+		}
+		query = query.Select("digest")
 		field, err := query.Build(ctx)
 		if err != nil {
 			return nil, err
 		}
-		fields[i] = strings.TrimSuffix(strings.TrimPrefix(field, "{"), "}")
+		fields = append(fields, strings.TrimSuffix(strings.TrimPrefix(field, "{"), "}"))
+	}
+	if len(batchPaths) > 0 {
+		field, err := querybuilder.Query().Select("digests").Arg("paths", batchPaths).Build(ctx)
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, strings.TrimSuffix(strings.TrimPrefix(field, "{"), "}"))
 	}
 	type digestResult struct {
 		Digest           string
@@ -226,19 +235,26 @@ func packageDigests(ctx context.Context, client *dagger.Query, sourceID dagger.I
 	if err != nil {
 		return nil, err
 	}
-	for i, root := range roots {
-		value := response[fmt.Sprintf("p%d", i)]
-		if directPaths && len(projections[root].children) == 0 {
-			var digest string
-			if err := json.Unmarshal(value, &digest); err != nil {
-				return nil, err
-			}
-			if digest == "" {
+	if len(batchPaths) > 0 {
+		var digests []string
+		if err := json.Unmarshal(response["digests"], &digests); err != nil {
+			return nil, err
+		}
+		if len(digests) != len(batchRoots) {
+			return nil, fmt.Errorf("got %d native source digests for %d paths", len(digests), len(batchRoots))
+		}
+		for i, root := range batchRoots {
+			if digests[i] == "" {
 				return nil, fmt.Errorf("missing native source digest for %s", root)
 			}
-			keys[root] = digest
+			keys[root] = digests[i]
+		}
+	}
+	for i, root := range roots {
+		if directPaths && len(projections[root].children) == 0 {
 			continue
 		}
+		value := response[fmt.Sprintf("p%d", i)]
 		var result *digestResult
 		if err := json.Unmarshal(value, &result); err != nil {
 			return nil, err
