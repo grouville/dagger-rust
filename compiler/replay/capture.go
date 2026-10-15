@@ -87,7 +87,8 @@ func Capture(ctx context.Context, client *dagger.Query, source Source, opts Capt
 			return nil, fmt.Errorf("unsupported Cargo argument %s", arg)
 		}
 	}
-	args := append([]string{"cargo", opts.Command, "--workspace", "--locked", "--offline", "--message-format=json-render-diagnostics"}, opts.CargoArgs...)
+	args := append([]string{"cargo", opts.Command}, CargoFlags(opts.CargoArgs)...)
+	args = append(args, "--offline", "--message-format=json-render-diagnostics")
 	if opts.Command == "test" {
 		if opts.TestRecorder == nil {
 			return nil, fmt.Errorf("test command recorder is required")

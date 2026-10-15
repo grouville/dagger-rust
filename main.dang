@@ -6,6 +6,12 @@ type CargoEnvelope {
 
 type CargoWorkspace {
   workspaceMembers: [String!]! @JSON.field(name: "workspace_members")
+  packages: [CargoPackage!]!
+}
+
+type CargoPackage {
+  packageID: String! @JSON.field(name: "id")
+  name: String!
 }
 
 type CargoTarget {
@@ -40,6 +46,7 @@ type NativeCompilation {
 }
 
 type Rust {
+  let packageNames: [String!]! = []
   """Debian bookworm amd64 Rust image. The default is pinned by digest."""
   pub image: String! = "rust@sha256:39f68a3e8e3ff425f8945ffa91128e60ff930d53e17fbb5214e95824bdd46f1b"
   """Project cache key. Use a distinct value per project."""
@@ -160,14 +167,37 @@ type Rust {
   }
 
   let cargoFlags: [String!]! {
-    let flags: [String!]! = ["--workspace"]
+    let flags: [String!]! = if (packageNames.isEmpty) { ["--workspace"] } else { [] }
     if (locked) { flags += ["--locked"] }
+    packageNames.each { name => flags += ["--package", name] }
     if (cargoProfile != null) { flags += ["--profile", cargoProfile] }
     if (target != null) { flags += ["--target", target] }
     if (!features.isEmpty) { flags += ["--features", features.join(",")] }
     if (allFeatures) { flags += ["--all-features"] }
     if (noDefaultFeatures) { flags += ["--no-default-features"] }
     flags
+  }
+
+  let forPackages(names: [String!]!): Rust! {
+    self.packageNames = names
+    if (!names.isEmpty) { self.cacheKey += "-packages-" + names.join(",") }
+    self
+  }
+
+  """Select workspace packages; checks run once for the selected group."""
+  packages(
+    source: Directory! @defaultPath(path: "/")
+      @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
+  ): Packages! {
+    let flags = ["cargo", "metadata", "--offline", "--no-deps", "--format-version=1"]
+    if (locked) { flags += ["--locked"] }
+    let output = projectToolchain(source)
+      .withMountedDirectory("/src", source).withWorkdir("/src")
+      .withExec(flags, disableDaggerInDagger: true).stdout
+    let metadata: CargoWorkspace! = JSON.decode(output)
+    let names = metadata.packages.filter { package => metadata.workspaceMembers.contains(package.packageID) }
+      .map { package => package.name }
+    Packages(project: self, source: source, names: names)
   }
 
   # Each action kind (check, clippy, test, build) owns its source mirror and
@@ -499,4 +529,39 @@ type Rust {
     }
     desired.changes(current)
   }
+}
+
+type Packages @collection {
+  keys: [String!]!
+  let all: [String!]!
+  let project: Rust!
+  let source: Directory!
+
+  new(project: Rust!, source: Directory!, names: [String!]!) {
+    self.project = project
+    self.source = source
+    self.keys = names
+    self.all = names
+    self
+  }
+
+  get(name: String!): Package! { Package(name: name) }
+
+  let selected: Rust! {
+    project.forPackages(if (keys.length == all.length) { [] } else { all.filter { name => keys.contains(name) } })
+  }
+
+  check: Void @check @cache(policy: FunctionCachePolicy.Never) {
+    if (!keys.isEmpty) { selected.check(source) }
+    null
+  }
+
+  test: Void @check @cache(policy: FunctionCachePolicy.Never) {
+    if (!keys.isEmpty) { selected.test(source) }
+    null
+  }
+}
+
+type Package {
+  name: String!
 }

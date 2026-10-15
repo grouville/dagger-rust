@@ -134,11 +134,14 @@ func (m *RustCompiler) Compile(ctx context.Context,
 		}
 	}
 	if automaticPlan {
-		if resolvedImage == "" || (command != "check" && command != "build" && command != "test") || len(cargoFlags) < 2 ||
-			!slices.Equal(cargoFlags[:2], []string{"--workspace", "--locked"}) {
-			return nil, fmt.Errorf("automatic plans require an image, a build/check command and --workspace --locked")
+		if resolvedImage == "" || (command != "check" && command != "build" && command != "test") {
+			return nil, fmt.Errorf("automatic plans require an image and a Cargo build, check or test command")
 		}
-		opts := replay.CaptureOptions{Image: resolvedImage, Command: command, CargoArgs: cargoFlags[2:]}
+		args, err := replay.CaptureArgs(cargoFlags)
+		if err != nil {
+			return nil, err
+		}
+		opts := replay.CaptureOptions{Image: resolvedImage, Command: command, CargoArgs: args}
 		matches, err := replay.NativePlanMatches(ctx, native, &recipe, opts)
 		if err != nil {
 			return nil, err
@@ -175,7 +178,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	if command != "" && command != capturedCommand {
 		return nil, fmt.Errorf("compiler plan is for cargo %s, requested cargo %s", capturedCommand, command)
 	}
-	if cargoFlags != nil && !slices.Equal(cargoFlags, append([]string{"--workspace", "--locked"}, recipe.CargoArgs...)) {
+	if cargoFlags != nil && !slices.Equal(cargoFlags, replay.CargoFlags(recipe.CargoArgs)) {
 		return nil, fmt.Errorf("Cargo flags differ from the compiler plan")
 	}
 	if resolvedImage != "" && resolvedImage != recipe.Image {
