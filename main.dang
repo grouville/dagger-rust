@@ -203,8 +203,8 @@ type Rust {
       .withMountedDirectory("/src", source).withWorkdir("/src")
       .withExec(flags, disableDaggerInDagger: true).stdout
     let metadata: CargoWorkspace! = JSON.decode(output)
-    let names = metadata.packages.filter { package => metadata.workspaceMembers.contains(package.packageID) }
-      .map { package => package.name }
+    # --no-deps returns workspace members only.
+    let names = metadata.packages.map { package => package.name }
     Packages(project: self, source: source, names: names)
   }
 
