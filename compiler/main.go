@@ -210,7 +210,7 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	ready, err := graph.Artifacts.Sync(ctx)
+	ready, err := graph.SyncArtifacts(ctx)
 	if err != nil {
 		return nil, err
 	}

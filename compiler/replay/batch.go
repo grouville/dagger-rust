@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -9,6 +10,33 @@ import (
 	"github.com/grouville/dagger-rust/compiler/model"
 	"github.com/grouville/dagger-rust/compiler/worker"
 )
+
+// SyncArtifacts evaluates a batch once and retains its resolved output snapshot.
+// Later cache publication uses that snapshot instead of resending the execution
+// recipe, including all compiler arguments and dependency descriptions.
+func (g *Graph) SyncArtifacts(ctx context.Context) (*dagger.Directory, error) {
+	if g.batchSnapshot == nil {
+		return g.Artifacts.Sync(ctx)
+	}
+	snapshot, err := g.batchSnapshot.Sync(ctx)
+	if err != nil {
+		return nil, err
+	}
+	artifacts, err := snapshot.Directory("target").Sync(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if g.Cache != nil {
+		for i := range g.Cache.Batches {
+			if g.Cache.Batches[i].Snapshot == g.batchSnapshot {
+				g.Cache.Batches[i].Snapshot = snapshot
+			}
+		}
+	}
+	g.batchSnapshot = snapshot
+	g.Artifacts = artifacts
+	return artifacts, nil
+}
 
 func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts BuildOptions) (*Graph, error) {
 	if opts.BatchWorkers < 1 {
