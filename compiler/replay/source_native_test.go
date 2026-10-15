@@ -59,6 +59,10 @@ func TestNativePackageProjectionOwnership(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		direct, err := packageDigests(ctx, query, id, packages, true)
+		if err != nil {
+			t.Fatal(err)
+		}
 		directories := PackageDirectories(source, packages)
 		for root, children := range roots {
 			relative := root[len("/src"):]
@@ -76,6 +80,9 @@ func TestNativePackageProjectionOwnership(t *testing.T) {
 			}
 			if got := digests[root]; got != want {
 				t.Errorf("%s package digest = %s, want %s", root, got, want)
+			}
+			if got := direct[root]; got != want {
+				t.Errorf("%s direct digest = %s, want %s", root, got, want)
 			}
 		}
 		return digests
