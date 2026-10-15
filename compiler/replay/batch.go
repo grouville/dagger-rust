@@ -37,7 +37,13 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 		opts.BatchCompiler = nil
 		return BuildWithOptions(client, plan, source, opts)
 	}
-	request := worker.Request{Actions: missing, Dependencies: plan.Actions, Packages: plan.Packages,
+	// Dependency views only need graph edges and output paths. Keep compiler
+	// arguments and environment on the actions that will actually execute.
+	dependencies := make([]model.Action, len(plan.Actions))
+	for i, action := range plan.Actions {
+		dependencies[i] = model.Action{ID: action.ID, Outputs: action.Outputs, Dependencies: action.Dependencies}
+	}
+	request := worker.Request{Actions: missing, Dependencies: dependencies, Packages: plan.Packages,
 		Concurrency: opts.BatchWorkers, Pipelining: !opts.BatchNoPipelining, NoIncremental: opts.BatchNoIncremental}
 	contents, err := json.Marshal(request)
 	if err != nil {
