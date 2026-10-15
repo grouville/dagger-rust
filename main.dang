@@ -86,42 +86,48 @@ type Rust {
   # state (/build) apart from the final outputs (/out); older ones use a single
   # target directory per action and the build lane publishes its final
   # artifacts into /out itself.
-  let cargoLayoutProbe: String! = """
-    set -eu
-    cargo_version=$(cargo --version)
-    printf '%s\n' "$cargo_version" >&2
-    if printf '%s\n' "$cargo_version" | awk '
-      $1 == "cargo" && $2 !~ /-/ {
-        split($2, v, ".")
-        if (v[1] > 1 || (v[1] == 1 && v[2] >= 91)) ok = 1
-      }
-      END { exit !ok }
-    '; then
-      echo build_dir=1 > /etc/dagger-rust-cargo
-    else
-      echo build_dir=0 > /etc/dagger-rust-cargo
-    fi
-  """
+  let cargoLayoutProbe: String! {
+    """
+      set -eu
+      cargo_version=$(cargo --version)
+      printf '%s\n' "$cargo_version" >&2
+      if printf '%s\n' "$cargo_version" | awk '
+        $1 == "cargo" && $2 !~ /-/ {
+          split($2, v, ".")
+          if (v[1] > 1 || (v[1] == 1 && v[2] >= 91)) ok = 1
+        }
+        END { exit !ok }
+      '; then
+        echo build_dir=1 > /etc/dagger-rust-cargo
+      else
+        echo build_dir=0 > /etc/dagger-rust-cargo
+      fi
+    """
+  }
 
   # Selects the target layout recorded by cargoLayoutProbe; one file read.
-  let layoutSelect: String! = "if ! grep -qs build_dir=1 /etc/dagger-rust-cargo; then unset CARGO_BUILD_BUILD_DIR; export CARGO_TARGET_DIR=/build; fi"
+  let layoutSelect: String! {
+    "if ! grep -qs build_dir=1 /etc/dagger-rust-cargo; then unset CARGO_BUILD_BUILD_DIR; export CARGO_TARGET_DIR=/build; fi"
+  }
 
   # Without build.build-dir, Cargo writes final artifacts next to its
   # intermediate state under /build. Copy the final ones (anything not under
   # deps/, build/, incremental/ or .fingerprint/) into /out and point
   # build.jsonl at them, so selectedArtifacts sees the same shape either way.
-  let publishLegacyArtifacts: String! = """
-    if ! grep -qs build_dir=1 /etc/dagger-rust-cargo; then
-      for f in $(grep -o '"/build/[^"]*"' /meta/build.jsonl | tr -d '"' | sort -u); do
-        rel=${f#/build/}
-        case "$rel" in */deps/*|*/build/*|*/incremental/*|*/.fingerprint/*) continue;; esac
-        [ -f "$f" ] || continue
-        mkdir -p "/out/$(dirname "$rel")"
-        cp -p "$f" "/out/$rel"
-        sed -i "s#\"$f\"#\"/out/$rel\"#g" /meta/build.jsonl
-      done
-    fi
-  """
+  let publishLegacyArtifacts: String! {
+    """
+      if ! grep -qs build_dir=1 /etc/dagger-rust-cargo; then
+        for f in $(grep -o '"/build/[^"]*"' /meta/build.jsonl | tr -d '"' | sort -u); do
+          rel=${f#/build/}
+          case "$rel" in */deps/*|*/build/*|*/incremental/*|*/.fingerprint/*) continue;; esac
+          [ -f "$f" ] || continue
+          mkdir -p "/out/$(dirname "$rel")"
+          cp -p "$f" "/out/$rel"
+          sed -i "s#\"$f\"#\"/out/$rel\"#g" /meta/build.jsonl
+        done
+      fi
+    """
+  }
 
   # The image plus what Cargo build scripts commonly need beyond it: rsync for
   # source reconciliation (see action), make for autotools-driven C builds,
