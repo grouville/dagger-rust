@@ -15,8 +15,8 @@ import (
 	"unicode/utf8"
 
 	dagger "dagger.io/dagger/core"
-	"github.com/grouville/dagger-rust/compiler/model"
 	"github.com/dagger/querybuilder"
+	"github.com/grouville/dagger-rust/compiler/model"
 )
 
 type SourceFile struct {
@@ -139,16 +139,18 @@ func (s Source) packageSources(packages []model.Package) map[string]Source {
 }
 
 // PackageDirectories projects a native workspace snapshot with the same file
-// ownership as packageSources. Remove only immediate nested packages: each
-// removal already excludes its descendants, avoiding a scan per source file.
+// ownership as packageSources. Remove immediate nested packages together: each
+// removal already excludes its descendants, and one snapshot covers the batch.
 // The caller must exclude target and .git directories from the input snapshot.
 func PackageDirectories(source *dagger.Directory, packages []model.Package) map[string]*dagger.Directory {
 	projections := packageProjections(packages)
 	directories := make(map[string]*dagger.Directory, len(projections))
 	for root, projection := range projections {
 		directory := source.Directory(projection.path)
-		for _, child := range projection.children {
-			directory = directory.WithoutDirectory(child)
+		if len(projection.children) > 1 {
+			directory = directory.WithoutFiles(projection.children)
+		} else if len(projection.children) == 1 {
+			directory = directory.WithoutDirectory(projection.children[0])
 		}
 		directories[root] = directory
 	}
@@ -200,8 +202,10 @@ func packageDigests(ctx context.Context, client *dagger.Query, sourceID dagger.I
 		if directPaths && len(projection.children) == 0 {
 			query = querybuilder.Query().SelectWithAlias(fmt.Sprintf("p%d", i), "digest").Arg("path", projection.path)
 		} else {
-			for _, child := range projection.children {
-				query = query.Select("withoutDirectory").Arg("path", child)
+			if len(projection.children) > 1 {
+				query = query.Select("withoutFiles").Arg("paths", projection.children)
+			} else if len(projection.children) == 1 {
+				query = query.Select("withoutDirectory").Arg("path", projection.children[0])
 			}
 			query = query.Select("digest")
 		}
@@ -214,6 +218,7 @@ func packageDigests(ctx context.Context, client *dagger.Query, sourceID dagger.I
 	type digestResult struct {
 		Digest           string
 		WithoutDirectory *digestResult
+		WithoutFiles     *digestResult
 	}
 	var response map[string]json.RawMessage
 	err := client.QueryBuilder().Select("node").Arg("id", sourceID).InlineFragment("Directory").
@@ -238,10 +243,9 @@ func packageDigests(ctx context.Context, client *dagger.Query, sourceID dagger.I
 		if err := json.Unmarshal(value, &result); err != nil {
 			return nil, err
 		}
-		for range projections[root].children {
-			if result == nil {
-				break
-			}
+		if result != nil && len(projections[root].children) > 1 {
+			result = result.WithoutFiles
+		} else if result != nil && len(projections[root].children) == 1 {
 			result = result.WithoutDirectory
 		}
 		if result == nil || result.Digest == "" {
