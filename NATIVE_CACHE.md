@@ -101,3 +101,11 @@ snapshots gives mixed results: leaf 0.956 to 0.988 s and shared 1.519 to 1.481 s
 Configuration exports disappear from profiles; a complete-command improvement
 is not yet established. The measurements and limitations are in the Dagger
 fork's `hack/rust-cache/NATIVE_CONFIGURATION.md`.
+
+The Go compiler helper accepts its own `Cache` object as `previousCache`.
+Automatic recovery passes the saved native object directly, avoiding a read and
+re-upload of its manifest, tokens and snapshot IDs through the Dang module.
+The existing separate cache fields remain supported for restored or explicitly
+supplied caches; combining both forms is rejected. An explicitly supplied plan
+still takes precedence over the previous cache's plan. The persisted cache and
+compiler-result keys are unchanged.

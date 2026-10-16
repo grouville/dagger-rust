@@ -326,6 +326,13 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg automaticPlan", err))
 				}
 			}
+			var previousCache *Cache
+			if inputArgs["previousCache"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["previousCache"]), &previousCache)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg previousCache", err))
+				}
+			}
 			var previousManifest string
 			if inputArgs["previousManifest"] != nil {
 				err = json.Unmarshal([]byte(inputArgs["previousManifest"]), &previousManifest)
@@ -382,7 +389,7 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg noIncremental", err))
 				}
 			}
-			return (*RustCompiler).Compile(&parent, ctx, source, plan, automaticPlan, previousManifest, previousTokens, previousSnapshots, workers, command, cargoFlags, image, noIncremental)
+			return (*RustCompiler).Compile(&parent, ctx, source, plan, automaticPlan, previousCache, previousManifest, previousTokens, previousSnapshots, workers, command, cargoFlags, image, noIncremental)
 		default:
 			return nil, fmt.Errorf("unknown function %s", fnName)
 		}
@@ -408,14 +415,15 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 							WithArg("source", dag.TypeDef().WithObject("Directory"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 81, 2)}).
 							WithArg("plan", dag.TypeDef().WithObject("File").WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 83, 2)}).
 							WithArg("automaticPlan", dag.TypeDef().WithKind(dagger.TypeDefKindBooleanKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Capture or refresh the plan from the current Cargo inputs.", SourceMap: dag.SourceMap("main.go", 86, 2)}).
-							WithArg("previousManifest", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 88, 2)}).
-							WithArg("previousTokens", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 90, 2)}).
-							WithArg("previousSnapshots", dag.TypeDef().WithListOf(dag.TypeDef().WithObject("Directory")).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 92, 2)}).
-							WithArg("workers", dag.TypeDef().WithKind(dagger.TypeDefKindIntegerKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 94, 2), DefaultValue: dagger.JSON("8")}).
-							WithArg("command", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo command, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 97, 2)}).
-							WithArg("cargoFlags", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo flags, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 100, 2)}).
-							WithArg("image", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected toolchain image, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 103, 2)}).
-							WithArg("noIncremental", dag.TypeDef().WithKind(dagger.TypeDefKindBooleanKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Disable rustc incremental state for reproducible generated artifacts.", SourceMap: dag.SourceMap("main.go", 106, 2)}))).
+							WithArg("previousCache", dag.TypeDef().WithObject("Cache").WithOptional(true), dagger.FunctionWithArgOpts{Description: "Previous native cache object. Cannot be combined with separate cache fields.", SourceMap: dag.SourceMap("main.go", 89, 2)}).
+							WithArg("previousManifest", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 91, 2)}).
+							WithArg("previousTokens", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 93, 2)}).
+							WithArg("previousSnapshots", dag.TypeDef().WithListOf(dag.TypeDef().WithObject("Directory")).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 95, 2)}).
+							WithArg("workers", dag.TypeDef().WithKind(dagger.TypeDefKindIntegerKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 97, 2), DefaultValue: dagger.JSON("8")}).
+							WithArg("command", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo command, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 100, 2)}).
+							WithArg("cargoFlags", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo flags, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 103, 2)}).
+							WithArg("image", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected toolchain image, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 106, 2)}).
+							WithArg("noIncremental", dag.TypeDef().WithKind(dagger.TypeDefKindBooleanKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Disable rustc incremental state for reproducible generated artifacts.", SourceMap: dag.SourceMap("main.go", 109, 2)}))).
 			WithObject(
 				dag.TypeDef().WithObject("Compilation", dagger.TypeDefWithObjectOpts{SourceMap: dag.SourceMap("main.go", 28, 6)}).
 					WithField("Artifacts", dag.TypeDef().WithObject("Directory"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 29, 2)}).

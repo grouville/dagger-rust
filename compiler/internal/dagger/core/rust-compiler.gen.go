@@ -80,6 +80,8 @@ type RustCompilerCompileOpts struct {
 	Plan *File
 	// Capture or refresh the plan from the current Cargo inputs.
 	AutomaticPlan bool
+	// Previous native cache object. Cannot be combined with separate cache fields.
+	PreviousCache *RustCompilerCache
 
 	PreviousManifest string
 
@@ -112,6 +114,10 @@ func (r *RustCompiler) Compile(source *Directory, opts ...RustCompilerCompileOpt
 		// `automaticPlan` optional argument
 		if !querybuilder.IsZeroValue(opts[i].AutomaticPlan) {
 			q = q.Arg("automaticPlan", opts[i].AutomaticPlan)
+		}
+		// `previousCache` optional argument
+		if !querybuilder.IsZeroValue(opts[i].PreviousCache) {
+			q = q.Arg("previousCache", opts[i].PreviousCache)
 		}
 		// `previousManifest` optional argument
 		if !querybuilder.IsZeroValue(opts[i].PreviousManifest) {

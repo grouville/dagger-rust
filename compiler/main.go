@@ -84,6 +84,9 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	// Capture or refresh the plan from the current Cargo inputs.
 	// +optional
 	automaticPlan bool,
+	// Previous native cache object. Cannot be combined with separate cache fields.
+	// +optional
+	previousCache *Cache,
 	// +optional
 	previousManifest string,
 	// +optional
@@ -105,6 +108,17 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	// +optional
 	noIncremental bool,
 ) (*Compilation, error) {
+	if previousCache != nil {
+		if previousManifest != "" || len(previousTokens) != 0 || len(previousSnapshots) != 0 {
+			return nil, fmt.Errorf("supply the previous cache object or its fields, not both")
+		}
+		if plan == nil {
+			plan = previousCache.Plan
+		}
+		previousManifest = previousCache.Manifest
+		previousTokens = previousCache.Tokens
+		previousSnapshots = previousCache.Snapshots
+	}
 	if plan == nil && !automaticPlan {
 		return nil, fmt.Errorf("compiler plan is required")
 	}

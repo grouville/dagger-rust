@@ -325,27 +325,13 @@ type Rust {
     let modeSuffix = if (noIncremental) { "-reproducible" } else { "" }
     let hintKey = cacheKey + "-native-" + command + modeSuffix
     let hintID = if (retained == null) { Dagger.nativeCacheHint(key: hintKey) } else { null }
-    let previousFields = if (retained == null) {
-      if (hintID == null) {
-        NativeCache(manifest: "", tokens: [], snapshots: [])
-      } else {
-        let stored = node(hintID!).{{... on RustCompilerCache!}}.{{
-          plan.{{id}}, manifest, tokens, snapshots.{{id}}
-        }}
-        NativeCache(
-          plan: node(stored.plan.id!).{{... on File!}},
-          manifest: stored.manifest,
-          tokens: stored.tokens,
-          snapshots: stored.snapshots.map { snapshot => node(snapshot.id!).{{... on Directory!}} },
-        )
-      }
-    } else {
-      retained
-    }
+    let previousCache = if (hintID == null) { null } else { node(hintID!).{{... on RustCompilerCache!}} }
+    let previousFields = retained ?? NativeCache(manifest: "", tokens: [], snapshots: [])
     let requestedPlan = if (command == "check") { compilerPlan } else { null }
     let selectedPlan = requestedPlan ?? previousFields.plan
     let result = rustCompiler.compile(source, plan: selectedPlan, automaticPlan: requestedPlan == null,
-      previousManifest: previousFields.manifest, previousTokens: previousFields.tokens, previousSnapshots: previousFields.snapshots,
+      previousCache: previousCache, previousManifest: previousFields.manifest,
+      previousTokens: previousFields.tokens, previousSnapshots: previousFields.snapshots,
       workers: 8, command: command, cargoFlags: cargoFlags, image: image, noIncremental: noIncremental)
     let compiled = result.{{
         artifacts.{{id}}, published.{{id}},
