@@ -52,6 +52,19 @@ type NativeCompilation {
   pub actions: Int!
 }
 
+type DiscoveredTestPackage {
+  name: String!
+  keys: [String!]!
+  commands: String!
+  executionIndex: Int!
+}
+
+type DiscoveredTests {
+  packages: [DiscoveredTestPackage!]!
+  environment: Container!
+  executions: [Container!]!
+}
+
 type Rust {
   let packageNames: [String!]! = []
   """Debian bookworm amd64 Rust image. The default is pinned by digest."""
@@ -387,6 +400,19 @@ type Rust {
     nativeCompilationResult("test", source, previous)
   }
 
+  let nativeTestSuite(source: Directory!): DiscoveredTests! {
+    assert("Individual test collections currently require nativeCache = true") { nativeCache }
+    let result = nativeCompilationResult("test", source, null)
+    let suite = rustCompiler.discoverTests(source, plan: result.cache.plan!, artifacts: result.artifacts).{{
+      metadata, environment.{{id}}, executions.{{id}}
+    }}
+    DiscoveredTests(
+      packages: JSON.decode(suite.metadata),
+      environment: node(suite.environment.id!).{{... on Container!}},
+      executions: suite.executions.map { execution => node(execution.id!).{{... on Container!}} },
+    )
+  }
+
   """Reconstruct a transferred cache with this engine's native directories."""
   pub restoreCompilerCache(manifest: String!, tokens: [String!]!, snapshots: [Directory!]!, plan: File = null): NativeCache! {
     assert("Compiler cache tokens and snapshots must match") { tokens.length == snapshots.length }
@@ -495,7 +521,7 @@ type Rust {
   pub test(
     source: Directory! @defaultPath(path: "/")
       @ignorePatterns(patterns: [".git", "target", "dagger.toml", "dagger.lock"]),
-  ): Void @check @cache(policy: FunctionCachePolicy.Never) {
+  ): Void @cache(policy: FunctionCachePolicy.Never) {
     if (nativeCache) {
       nativeCompilationResult("test", source, null).tests!.sync
     } else {
@@ -594,7 +620,7 @@ type Packages @collection {
     self
   }
 
-  get(name: String!): Package! { Package(name: name) }
+  get(name: String!): Package! { Package(name: name, project: project, source: source) }
 
   let selected: Rust! {
     project.forPackages(if (keys.length == all.length) { [] } else { all.filter { name => keys.contains(name) } })
@@ -605,12 +631,61 @@ type Packages @collection {
     null
   }
 
-  test: Void @check @cache(policy: FunctionCachePolicy.Never) {
-    if (!keys.isEmpty) { selected.test(source) }
-    null
-  }
 }
 
 type Package {
   name: String!
+  let project: Rust!
+  let source: Directory!
+
+  tests: RustTests! {
+    let suite = project.forPackages([name]).nativeTestSuite(source)
+    let matching = suite.packages.filter { package => package.name == name }
+    let empty: [String!]! = []
+    let keys = matching.reduce(empty) { keys, package => keys + package.keys }
+    RustTests(
+      keys: keys,
+      all: keys,
+      package: name,
+      commands: matching.map { package => package.commands }.join(""),
+      environment: suite.environment,
+      executions: matching.map { package => suite.executions[package.executionIndex]! },
+    )
+  }
+}
+
+type RustTests @collection {
+  keys: [String!]!
+  let package: String!
+  let commands: String!
+  let environment: Container!
+  let all: [String!]!
+  let executions: [Container!]!
+
+  get(name: String!): RustTest! {
+    RustTest(name: name, package: package, commands: commands, environment: environment)
+  }
+
+  test: Void @check {
+    if (!keys.isEmpty) {
+      if (keys.length == all.length) {
+        executions.each { execution => execution.sync }
+      } else {
+        rustCompiler.runTestSelection(environment, commands: commands, pkg: package, keys: keys).sync
+      }
+    }
+    null
+  }
+}
+
+type RustTest {
+  name: String!
+  let package: String!
+  let commands: String!
+  let environment: Container!
+
+  test: Void @check {
+    rustCompiler.runTestSelection(environment, commands: commands, pkg: package, keys: [name]).sync
+    null
+  }
 }

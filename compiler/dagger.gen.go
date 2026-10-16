@@ -113,6 +113,34 @@ func (r *Compilation) UnmarshalJSON(bs []byte) error {
 	return nil
 }
 
+func (r TestSuite) MarshalJSON() ([]byte, error) {
+	var concrete struct {
+		Metadata    string
+		Environment *dagger.Container
+		Executions  []*dagger.Container
+	}
+	concrete.Metadata = r.Metadata
+	concrete.Environment = r.Environment
+	concrete.Executions = r.Executions
+	return json.Marshal(&concrete)
+}
+
+func (r *TestSuite) UnmarshalJSON(bs []byte) error {
+	var concrete struct {
+		Metadata    string
+		Environment *dagger.Container
+		Executions  []*dagger.Container
+	}
+	err := json.Unmarshal(bs, &concrete)
+	if err != nil {
+		return err
+	}
+	r.Metadata = concrete.Metadata
+	r.Environment = concrete.Environment
+	r.Executions = concrete.Executions
+	return nil
+}
+
 func (r Cache) MarshalJSON() ([]byte, error) {
 	var concrete struct {
 		Plan      *dagger.File
@@ -383,6 +411,69 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 				}
 			}
 			return (*RustCompiler).Compile(&parent, ctx, source, plan, automaticPlan, previousManifest, previousTokens, previousSnapshots, workers, command, cargoFlags, image, noIncremental)
+		case "DiscoverTests":
+			var parent RustCompiler
+			err = json.Unmarshal(parentJSON, &parent)
+			if err != nil {
+				panic(fmt.Errorf("%s: %w", "failed to unmarshal parent object", err))
+			}
+			var source *dagger.Directory
+			if inputArgs["source"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["source"]), &source)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg source", err))
+				}
+			}
+			var plan *dagger.File
+			if inputArgs["plan"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["plan"]), &plan)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg plan", err))
+				}
+			}
+			var artifacts *dagger.Directory
+			if inputArgs["artifacts"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["artifacts"]), &artifacts)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg artifacts", err))
+				}
+			}
+			return (*RustCompiler).DiscoverTests(&parent, ctx, source, plan, artifacts)
+		case "RunTestSelection":
+			var parent RustCompiler
+			err = json.Unmarshal(parentJSON, &parent)
+			if err != nil {
+				panic(fmt.Errorf("%s: %w", "failed to unmarshal parent object", err))
+			}
+			var environment *dagger.Container
+			if inputArgs["environment"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["environment"]), &environment)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg environment", err))
+				}
+			}
+			var commands string
+			if inputArgs["commands"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["commands"]), &commands)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg commands", err))
+				}
+			}
+			var pkg string
+			if inputArgs["pkg"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["pkg"]), &pkg)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg pkg", err))
+				}
+			}
+			var keys []string
+			if inputArgs["keys"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["keys"]), &keys)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg keys", err))
+				}
+			}
+			return (*RustCompiler).RunTestSelection(&parent, ctx, environment, commands, pkg, keys)
 		default:
 			return nil, fmt.Errorf("unknown function %s", fnName)
 		}
@@ -415,7 +506,24 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 							WithArg("command", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo command, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 97, 2)}).
 							WithArg("cargoFlags", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo flags, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 100, 2)}).
 							WithArg("image", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected toolchain image, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 103, 2)}).
-							WithArg("noIncremental", dag.TypeDef().WithKind(dagger.TypeDefKindBooleanKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Disable rustc incremental state for reproducible generated artifacts.", SourceMap: dag.SourceMap("main.go", 106, 2)}))).
+							WithArg("noIncremental", dag.TypeDef().WithKind(dagger.TypeDefKindBooleanKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Disable rustc incremental state for reproducible generated artifacts.", SourceMap: dag.SourceMap("main.go", 106, 2)})).
+					WithFunction(
+						dag.Function("DiscoverTests",
+							dag.TypeDef().WithObject("TestSuite")).
+							WithDescription("DiscoverTests asks compiled libtest harnesses for their actual test names.\nDiscovery runs once for the workspace; package batches share its result.").
+							WithSourceMap(dag.SourceMap("test_collection.go", 31, 1)).
+							WithArg("source", dag.TypeDef().WithObject("Directory"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 31, 59)}).
+							WithArg("plan", dag.TypeDef().WithObject("File"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 31, 85)}).
+							WithArg("artifacts", dag.TypeDef().WithObject("Directory"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 31, 104)})).
+					WithFunction(
+						dag.Function("RunTestSelection",
+							dag.TypeDef().WithObject("Container")).
+							WithDescription("RunTestSelection executes one package's selected tests, retaining Cargo's\ncaptured command order, environment and working directories.").
+							WithSourceMap(dag.SourceMap("test_collection.go", 115, 1)).
+							WithArg("environment", dag.TypeDef().WithObject("Container"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 115, 62)}).
+							WithArg("commands", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 115, 93)}).
+							WithArg("pkg", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 115, 110)}).
+							WithArg("keys", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 115, 122)}))).
 			WithObject(
 				dag.TypeDef().WithObject("Compilation", dagger.TypeDefWithObjectOpts{SourceMap: dag.SourceMap("main.go", 28, 6)}).
 					WithField("Artifacts", dag.TypeDef().WithObject("Directory"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 29, 2)}).
@@ -424,6 +532,11 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 					WithField("Actions", dag.TypeDef().WithKind(dagger.TypeDefKindIntegerKind), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 32, 2)}).
 					WithField("Published", dag.TypeDef().WithObject("Directory"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 33, 2)}).
 					WithField("Tests", dag.TypeDef().WithObject("Container"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 34, 2)})).
+			WithObject(
+				dag.TypeDef().WithObject("TestSuite", dagger.TypeDefWithObjectOpts{SourceMap: dag.SourceMap("test_collection.go", 16, 6)}).
+					WithField("Metadata", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("test_collection.go", 17, 2)}).
+					WithField("Environment", dag.TypeDef().WithObject("Container"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("test_collection.go", 18, 2)}).
+					WithField("Executions", dag.TypeDef().WithListOf(dag.TypeDef().WithObject("Container")), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("test_collection.go", 19, 2)})).
 			WithObject(
 				dag.TypeDef().WithObject("Cache", dagger.TypeDefWithObjectOpts{Description: "Cache retains compiler results and incremental state as native Dagger fields.", SourceMap: dag.SourceMap("main.go", 21, 6)}).
 					WithField("Plan", dag.TypeDef().WithObject("File"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 22, 2)}).

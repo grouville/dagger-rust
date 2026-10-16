@@ -21,7 +21,7 @@ HTTPS and SSH with `git ls-remote` on every command (~400ms) before it reads the
 
 ```sh
 dagger check rust:check                 # cargo check
-dagger check rust:fmt rust:clippy rust:test
+dagger check rust:fmt rust:clippy rust:packages/tests/test
 dagger check                            # all of the above, plus generated-artifact drift
 dagger generate -y                      # cargo build; publish artifacts under target/dagger
 dagger call rust artifacts export --path ./dist
@@ -52,7 +52,7 @@ a cached layer keyed by those files only.
 ## Experimental native compiler cache
 
 The `experiment/native-build-test` branch can run the normal `rust:check`,
-`rust:test` and `rust:build` entrypoints with `nativeCache = true`. It requires
+test and build entrypoints with `nativeCache = true`. It requires
 an experimental engine with native cache hints and `Directory.checkpoint`;
 released engines do not provide these APIs. The reference engine branch is
 [`experiment/persistent-native-cache-hints`](https://github.com/grouville/dagger/tree/experiment/persistent-native-cache-hints).
@@ -120,3 +120,38 @@ and Clippy still use the existing Cargo backend.
 - The generator rejects symlink artifacts and workspaces with no final
   artifacts.
 - Disk: one intermediate build directory per action per project.
+# Experimental test collections
+
+The `experiment/test-collection-granularity` branch exposes packages and their
+individual tests as two collection dimensions, matching the Go module's selection
+levels. It currently requires `nativeCache = true`.
+
+```sh
+dagger check rust:packages/tests/test
+dagger check 'dag://?check=rust/packages/tests/test&rust-package=my_crate'
+dagger check 'dag://?check=rust/packages/tests/test&rust-package=my_crate&rust-test=src/lib.rs::tests::example'
+```
+
+Test names come from the compiled Rust test harness, including generated and
+configured tests. Unit and integration tests use their target source path and
+function name as a key. Documentation tests remain one entry per target. Custom
+test harnesses are not supported by this collection prototype.
+
+Package discovery is shared. Compiler plans and test discovery are retained per
+package, so selecting one package also excludes compilation errors in other
+packages. Listing tests compiles their harnesses when needed. Each package's selected
+tests run in one container; a partial selection keeps the captured test command,
+environment and working directory. Different packages have separate filesystem
+views. The workspace command preserves the existing command order and shared
+filesystem effects across packages:
+
+```sh
+dagger api call rust test --source .
+```
+
+That function remains callable directly and no longer registers a second test
+check alongside the collection. Compiler outputs and incremental state remain
+native immutable Dagger snapshots. This branch is an experiment for comparing
+selection granularity and execution overhead; the existing selected module stays
+on its workspace batch implementation.
+

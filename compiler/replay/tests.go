@@ -30,11 +30,16 @@ func TestExecution(client *dagger.Query, plan *model.Plan, source, target *dagge
 	if err != nil {
 		return nil, err
 	}
-	return client.Container(dagger.ContainerOpts{Platform: "linux/amd64"}).From(plan.Image).
-		WithMountedDirectory(model.SourceRoot, source).WithMountedDirectory(model.TargetRoot, target).
-		WithMountedFile(worker.Root+"/runner", runner).
+	return TestEnvironment(client, plan, source, target, runner).
 		WithNewFile(worker.Root+"/tests.json", string(contents), dagger.ContainerWithNewFileOpts{Permissions: 0600}).
 		WithExec([]string{worker.Root + "/runner", "tests", worker.Root + "/tests.json"}, noNesting()), nil
+}
+
+// TestEnvironment holds the immutable inputs shared by test listing and batches.
+func TestEnvironment(client *dagger.Query, plan *model.Plan, source, target *dagger.Directory, runner *dagger.File) *dagger.Container {
+	return client.Container(dagger.ContainerOpts{Platform: "linux/amd64"}).From(plan.Image).
+		WithMountedDirectory(model.SourceRoot, source).WithMountedDirectory(model.TargetRoot, target).
+		WithMountedFile(worker.Root+"/runner", runner)
 }
 
 func testCommands(plan *model.Plan) ([]model.TestCommand, error) {
