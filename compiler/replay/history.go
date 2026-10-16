@@ -228,9 +228,13 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 		for _, output := range action.Outputs {
 			outputSet[targetRelative(output)] = true
 		}
-		for _, dep := range action.Dependencies {
-			for _, output := range closures[dep] {
-				outputSet[output] = true
+		// The batch worker constructs dependency views from graph edges. Its
+		// retained targets only need the owning action's outputs.
+		if opts.BatchCompiler == nil {
+			for _, dep := range action.Dependencies {
+				for _, output := range closures[dep] {
+					outputSet[output] = true
+				}
 			}
 		}
 		closures[action.ID] = sortedKeys(outputSet)
@@ -288,14 +292,16 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 			include:   seedGroups[group],
 		})
 	}
-	if inputs.artifacts != nil && len(missingOutputs) > 0 {
+	if inputs.artifacts != nil {
 		for _, overlay := range overlays {
 			inputs.artifacts = inputs.artifacts.WithDirectory(".", overlay)
 		}
-		inputs.artifacts = client.Directory().WithDirectory(".", inputs.artifacts,
-			dagger.DirectoryWithDirectoryOpts{Exclude: missingOutputs})
-		if len(inputs.hits) == 0 {
-			inputs.artifacts = client.Directory()
+		if len(missingOutputs) > 0 {
+			inputs.artifacts = client.Directory().WithDirectory(".", inputs.artifacts,
+				dagger.DirectoryWithDirectoryOpts{Exclude: missingOutputs})
+			if len(inputs.hits) == 0 {
+				inputs.artifacts = client.Directory()
+			}
 		}
 	}
 	opts.automatic = inputs

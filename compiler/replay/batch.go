@@ -33,48 +33,52 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 			}
 		}
 	}
-	if len(missing) == 0 {
-		opts.BatchCompiler = nil
-		return BuildWithOptions(client, plan, source, opts)
-	}
-	// Dependency views only need graph edges and output paths. Keep compiler
-	// arguments and environment on the actions that will actually execute.
-	dependencies := make([]model.Action, len(plan.Actions))
-	for i, action := range plan.Actions {
-		dependencies[i] = model.Action{ID: action.ID, Outputs: action.Outputs, Dependencies: action.Dependencies}
-	}
-	request := worker.Request{Actions: missing, Dependencies: dependencies, Packages: plan.Packages,
-		Concurrency: opts.BatchWorkers, Pipelining: !opts.BatchNoPipelining, NoIncremental: opts.BatchNoIncremental}
-	contents, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-	workspace := opts.SourceDirectory
-	if workspace == nil {
-		workspace = source.Directory(client)
-	}
-	target, incremental := client.Directory(), client.Directory()
+	target := client.Directory()
 	if opts.automatic.artifacts != nil {
 		target = opts.automatic.artifacts
 	} else if len(targets) > 0 {
 		target = mergeArtifactDirectories(targets)
 	}
-	if len(seeds) > 0 {
-		incremental = mergeArtifactDirectories(seeds)
+	graph := &Graph{Artifacts: target, results: map[string]*dagger.Directory{}}
+	var container *dagger.Container
+	if len(missing) > 0 {
+		// Dependency views only need graph edges and output paths. Keep compiler
+		// arguments and environment on the actions that will actually execute.
+		dependencies := make([]model.Action, len(plan.Actions))
+		for i, action := range plan.Actions {
+			dependencies[i] = model.Action{ID: action.ID, Outputs: action.Outputs, Dependencies: action.Dependencies}
+		}
+		request := worker.Request{Actions: missing, Dependencies: dependencies, Packages: plan.Packages,
+			Concurrency: opts.BatchWorkers, Pipelining: !opts.BatchNoPipelining, NoIncremental: opts.BatchNoIncremental}
+		contents, err := json.Marshal(request)
+		if err != nil {
+			return nil, err
+		}
+		workspace := opts.SourceDirectory
+		if workspace == nil {
+			workspace = source.Directory(client)
+		}
+		incremental := client.Directory()
+		if len(seeds) > 0 {
+			incremental = mergeArtifactDirectories(seeds)
+		}
+		state := client.Directory().WithDirectory("target", target).WithDirectory("incremental", incremental)
+		for _, seed := range opts.automatic.batchSeeds {
+			// Copy only the selected crates into their final input path. An
+			// intermediate filtered directory would copy the same state twice.
+			state = state.WithDirectory("incremental", seed.directory, dagger.DirectoryWithDirectoryOpts{Include: seed.include})
+		}
+		container = client.Container(dagger.ContainerOpts{Platform: "linux/amd64"}).From(plan.Image).
+			WithMountedDirectory(model.SourceRoot, workspace).
+			WithMountedDirectory(worker.OutputRoot, state).
+			WithMountedFile(worker.Root+"/runner", opts.BatchCompiler).
+			WithNewFile(worker.Root+"/request.json", string(contents), dagger.ContainerWithNewFileOpts{Permissions: 0600}).
+			WithExec([]string{worker.Root + "/runner", "worker", worker.Root + "/request.json"}, noNesting())
+		graph.BatchTrace = container.File(worker.Root + "/timings.json")
+		// Outputs, incremental state and markers share one mounted snapshot.
+		graph.Artifacts = container.Directory(worker.TargetRoot)
+		graph.batchSnapshot = container.Directory(worker.OutputRoot)
 	}
-	state := client.Directory().WithDirectory("target", target).WithDirectory("incremental", incremental)
-	for _, seed := range opts.automatic.batchSeeds {
-		// Copy only the selected crates into their final input path. An
-		// intermediate filtered directory would copy the same state twice.
-		state = state.WithDirectory("incremental", seed.directory, dagger.DirectoryWithDirectoryOpts{Include: seed.include})
-	}
-	container := client.Container(dagger.ContainerOpts{Platform: "linux/amd64"}).From(plan.Image).
-		WithMountedDirectory(model.SourceRoot, workspace).
-		WithMountedDirectory(worker.OutputRoot, state).
-		WithMountedFile(worker.Root+"/runner", opts.BatchCompiler).
-		WithNewFile(worker.Root+"/request.json", string(contents), dagger.ContainerWithNewFileOpts{Permissions: 0600}).
-		WithExec([]string{worker.Root + "/runner", "worker", worker.Root + "/request.json"}, noNesting())
-	graph := &Graph{results: map[string]*dagger.Directory{}, BatchTrace: container.File(worker.Root + "/timings.json")}
 	for _, action := range actions {
 		retained := opts.automatic.hits[action.ID]
 		operation := Operation{Action: action, Files: map[string]*dagger.File{}}
@@ -94,12 +98,5 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 		}
 		graph.Operations = append(graph.Operations, operation)
 	}
-	// The worker publishes only captured outputs and removes its private
-	// compiler trees after success. Reuse that snapshot rather than copying
-	// every artifact into a newly filtered directory.
-	graph.Artifacts = container.Directory(worker.TargetRoot)
-	// Outputs, incremental state and markers share one mounted snapshot.
-	// Manifest entries still select each crate's results independently.
-	graph.batchSnapshot = container.Directory(worker.OutputRoot)
 	return graph, nil
 }
