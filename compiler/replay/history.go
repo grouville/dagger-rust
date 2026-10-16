@@ -84,11 +84,12 @@ type retainedResult struct {
 }
 
 type automaticInputs struct {
-	hits        map[string]*retainedResult
-	seeds       map[string]*dagger.Directory
-	artifacts   *dagger.Directory
-	batchSeeds  []batchSeed
-	batchSeeded map[string]bool
+	hits             map[string]*retainedResult
+	seeds            map[string]*dagger.Directory
+	artifacts        *dagger.Directory
+	artifactExcludes []string
+	batchSeeds       []batchSeed
+	batchSeeded      map[string]bool
 }
 
 type batchSeed struct {
@@ -297,10 +298,15 @@ func BuildAutomatic(ctx context.Context, client *dagger.Query, plan *model.Plan,
 			inputs.artifacts = inputs.artifacts.WithDirectory(".", overlay)
 		}
 		if len(missingOutputs) > 0 {
-			inputs.artifacts = client.Directory().WithDirectory(".", inputs.artifacts,
-				dagger.DirectoryWithDirectoryOpts{Exclude: missingOutputs})
 			if len(inputs.hits) == 0 {
 				inputs.artifacts = client.Directory()
+			} else if opts.BatchCompiler != nil {
+				// Filter while placing artifacts into the worker's input snapshot,
+				// rather than materializing the same retained files twice.
+				inputs.artifactExcludes = missingOutputs
+			} else {
+				inputs.artifacts = client.Directory().WithDirectory(".", inputs.artifacts,
+					dagger.DirectoryWithDirectoryOpts{Exclude: missingOutputs})
 			}
 		}
 	}

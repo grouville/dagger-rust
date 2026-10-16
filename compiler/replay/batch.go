@@ -62,7 +62,9 @@ func buildBatch(client *dagger.Query, plan *model.Plan, source Source, opts Buil
 		if len(seeds) > 0 {
 			incremental = mergeArtifactDirectories(seeds)
 		}
-		state := client.Directory().WithDirectory("target", target).WithDirectory("incremental", incremental)
+		state := client.Directory().
+			WithDirectory("target", target, dagger.DirectoryWithDirectoryOpts{Exclude: opts.automatic.artifactExcludes}).
+			WithDirectory("incremental", incremental)
 		for _, seed := range opts.automatic.batchSeeds {
 			// Copy only the selected crates into their final input path. An
 			// intermediate filtered directory would copy the same state twice.
