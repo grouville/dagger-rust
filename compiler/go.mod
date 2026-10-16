@@ -9,6 +9,7 @@ replace dagger.io/dagger => dagger.io/dagger v1.0.0-beta.17
 require (
 	dagger.io/dagger v1.0.0-beta.12
 	github.com/dagger/querybuilder v0.0.0-20260402040506-574a5e81cb59
+	github.com/goccy/go-json v0.11.2
 	golang.org/x/sync v0.20.0
 )
 
