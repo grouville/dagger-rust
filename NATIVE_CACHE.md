@@ -109,3 +109,11 @@ The existing separate cache fields remain supported for restored or explicitly
 supplied caches; combining both forms is rejected. An explicitly supplied plan
 still takes precedence over the previous cache's plan. The persisted cache and
 compiler-result keys are unchanged.
+
+This direct-object variant is not selected. Its edited-command gain is modest
+and inconsistent, and a 20-edit retention comparison exposes growing ownership
+ancestry: the latest cache reaches 279 snapshot references after pruning,
+versus a stable 59 with separate cache fields. The stored history bounds and
+compiler-result keys alone do not prevent the prior cache objects from staying
+reachable through function inputs. Keep the separate-field path until a bounded
+value representation can preserve native ownership without that ancestry.
