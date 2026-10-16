@@ -81,6 +81,7 @@ func (r Compilation) MarshalJSON() ([]byte, error) {
 		Actions   int
 		Published *dagger.Directory
 		Tests     *dagger.Container
+		TestSuite *TestSuite
 	}
 	concrete.Artifacts = r.Artifacts
 	concrete.Cache = r.Cache
@@ -88,6 +89,7 @@ func (r Compilation) MarshalJSON() ([]byte, error) {
 	concrete.Actions = r.Actions
 	concrete.Published = r.Published
 	concrete.Tests = r.Tests
+	concrete.TestSuite = r.TestSuite
 	return json.Marshal(&concrete)
 }
 
@@ -99,6 +101,7 @@ func (r *Compilation) UnmarshalJSON(bs []byte) error {
 		Actions   int
 		Published *dagger.Directory
 		Tests     *dagger.Container
+		TestSuite *TestSuite
 	}
 	err := json.Unmarshal(bs, &concrete)
 	if err != nil {
@@ -110,6 +113,7 @@ func (r *Compilation) UnmarshalJSON(bs []byte) error {
 	r.Actions = concrete.Actions
 	r.Published = concrete.Published
 	r.Tests = concrete.Tests
+	r.TestSuite = concrete.TestSuite
 	return nil
 }
 
@@ -410,7 +414,14 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg noIncremental", err))
 				}
 			}
-			return (*RustCompiler).Compile(&parent, ctx, source, plan, automaticPlan, previousManifest, previousTokens, previousSnapshots, workers, command, cargoFlags, image, noIncremental)
+			var collectTests bool
+			if inputArgs["collectTests"] != nil {
+				err = json.Unmarshal([]byte(inputArgs["collectTests"]), &collectTests)
+				if err != nil {
+					panic(fmt.Errorf("%s: %w", "failed to unmarshal input arg collectTests", err))
+				}
+			}
+			return (*RustCompiler).Compile(&parent, ctx, source, plan, automaticPlan, previousManifest, previousTokens, previousSnapshots, workers, command, cargoFlags, image, noIncremental, collectTests)
 		case "DiscoverTests":
 			var parent RustCompiler
 			err = json.Unmarshal(parentJSON, &parent)
@@ -486,31 +497,32 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 						dag.Function("Capture",
 							dag.TypeDef().WithObject("File")).
 							WithDescription("Capture records the compiler graph for a supported, locked Cargo workspace.").
-							WithSourceMap(dag.SourceMap("main.go", 38, 1)).
-							WithArg("source", dag.TypeDef().WithObject("Directory"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 39, 2)}).
-							WithArg("image", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 41, 2), DefaultValue: dagger.JSON("\"rust:1.77-bookworm@sha256:83101f6985c93e1e6501b3375de188ee3d2cbb89968bcc91611591f9f447bd42\"")}).
-							WithArg("command", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 43, 2), DefaultValue: dagger.JSON("\"build\"")}).
-							WithArg("cargoArgs", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 45, 2)})).
+							WithSourceMap(dag.SourceMap("main.go", 39, 1)).
+							WithArg("source", dag.TypeDef().WithObject("Directory"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 40, 2)}).
+							WithArg("image", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 42, 2), DefaultValue: dagger.JSON("\"rust:1.77-bookworm@sha256:83101f6985c93e1e6501b3375de188ee3d2cbb89968bcc91611591f9f447bd42\"")}).
+							WithArg("command", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 44, 2), DefaultValue: dagger.JSON("\"build\"")}).
+							WithArg("cargoArgs", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 46, 2)})).
 					WithFunction(
 						dag.Function("Compile",
 							dag.TypeDef().WithObject("Compilation")).
 							WithDescription("Compile keeps exact results and compatible incremental state separately.\nPrevious cache fields must come from this builder or their native transfer.").
-							WithSourceMap(dag.SourceMap("main.go", 80, 1)).
-							WithArg("source", dag.TypeDef().WithObject("Directory"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 81, 2)}).
-							WithArg("plan", dag.TypeDef().WithObject("File").WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 83, 2)}).
-							WithArg("automaticPlan", dag.TypeDef().WithKind(dagger.TypeDefKindBooleanKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Capture or refresh the plan from the current Cargo inputs.", SourceMap: dag.SourceMap("main.go", 86, 2)}).
-							WithArg("previousManifest", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 88, 2)}).
-							WithArg("previousTokens", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 90, 2)}).
-							WithArg("previousSnapshots", dag.TypeDef().WithListOf(dag.TypeDef().WithObject("Directory")).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 92, 2)}).
-							WithArg("workers", dag.TypeDef().WithKind(dagger.TypeDefKindIntegerKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 94, 2), DefaultValue: dagger.JSON("8")}).
-							WithArg("command", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo command, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 97, 2)}).
-							WithArg("cargoFlags", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo flags, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 100, 2)}).
-							WithArg("image", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected toolchain image, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 103, 2)}).
-							WithArg("noIncremental", dag.TypeDef().WithKind(dagger.TypeDefKindBooleanKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Disable rustc incremental state for reproducible generated artifacts.", SourceMap: dag.SourceMap("main.go", 106, 2)})).
+							WithSourceMap(dag.SourceMap("main.go", 81, 1)).
+							WithArg("source", dag.TypeDef().WithObject("Directory"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 82, 2)}).
+							WithArg("plan", dag.TypeDef().WithObject("File").WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 84, 2)}).
+							WithArg("automaticPlan", dag.TypeDef().WithKind(dagger.TypeDefKindBooleanKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Capture or refresh the plan from the current Cargo inputs.", SourceMap: dag.SourceMap("main.go", 87, 2)}).
+							WithArg("previousManifest", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 89, 2)}).
+							WithArg("previousTokens", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 91, 2)}).
+							WithArg("previousSnapshots", dag.TypeDef().WithListOf(dag.TypeDef().WithObject("Directory")).WithOptional(true), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 93, 2)}).
+							WithArg("workers", dag.TypeDef().WithKind(dagger.TypeDefKindIntegerKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("main.go", 95, 2), DefaultValue: dagger.JSON("8")}).
+							WithArg("command", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo command, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 98, 2)}).
+							WithArg("cargoFlags", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected Cargo flags, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 101, 2)}).
+							WithArg("image", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Expected toolchain image, when called by the Rust module's normal action.", SourceMap: dag.SourceMap("main.go", 104, 2)}).
+							WithArg("noIncremental", dag.TypeDef().WithKind(dagger.TypeDefKindBooleanKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Disable rustc incremental state for reproducible generated artifacts.", SourceMap: dag.SourceMap("main.go", 107, 2)}).
+							WithArg("collectTests", dag.TypeDef().WithKind(dagger.TypeDefKindBooleanKind).WithOptional(true), dagger.FunctionWithArgOpts{Description: "Discover individual tests alongside compilation, instead of preparing a workspace test run.", SourceMap: dag.SourceMap("main.go", 110, 2)})).
 					WithFunction(
 						dag.Function("DiscoverTests",
 							dag.TypeDef().WithObject("TestSuite")).
-							WithDescription("DiscoverTests asks compiled libtest harnesses for their actual test names.\nDiscovery runs once for the workspace; package batches share its result.").
+							WithDescription("DiscoverTests asks compiled libtest harnesses for their actual test names.\nDiscovery uses the packages selected by the compiler plan.").
 							WithSourceMap(dag.SourceMap("test_collection.go", 31, 1)).
 							WithArg("source", dag.TypeDef().WithObject("Directory"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 31, 59)}).
 							WithArg("plan", dag.TypeDef().WithObject("File"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 31, 85)}).
@@ -519,11 +531,11 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 						dag.Function("RunTestSelection",
 							dag.TypeDef().WithObject("Container")).
 							WithDescription("RunTestSelection executes one package's selected tests, retaining Cargo's\ncaptured command order, environment and working directories.").
-							WithSourceMap(dag.SourceMap("test_collection.go", 115, 1)).
-							WithArg("environment", dag.TypeDef().WithObject("Container"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 115, 62)}).
-							WithArg("commands", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 115, 93)}).
-							WithArg("pkg", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 115, 110)}).
-							WithArg("keys", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 115, 122)}))).
+							WithSourceMap(dag.SourceMap("test_collection.go", 119, 1)).
+							WithArg("environment", dag.TypeDef().WithObject("Container"), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 119, 62)}).
+							WithArg("commands", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 119, 93)}).
+							WithArg("pkg", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 119, 110)}).
+							WithArg("keys", dag.TypeDef().WithListOf(dag.TypeDef().WithKind(dagger.TypeDefKindStringKind)), dagger.FunctionWithArgOpts{SourceMap: dag.SourceMap("test_collection.go", 119, 122)}))).
 			WithObject(
 				dag.TypeDef().WithObject("Compilation", dagger.TypeDefWithObjectOpts{SourceMap: dag.SourceMap("main.go", 28, 6)}).
 					WithField("Artifacts", dag.TypeDef().WithObject("Directory"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 29, 2)}).
@@ -531,7 +543,8 @@ func invoke(ctx context.Context, parentJSON []byte, parentName string, fnName st
 					WithField("Hits", dag.TypeDef().WithKind(dagger.TypeDefKindIntegerKind), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 31, 2)}).
 					WithField("Actions", dag.TypeDef().WithKind(dagger.TypeDefKindIntegerKind), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 32, 2)}).
 					WithField("Published", dag.TypeDef().WithObject("Directory"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 33, 2)}).
-					WithField("Tests", dag.TypeDef().WithObject("Container"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 34, 2)})).
+					WithField("Tests", dag.TypeDef().WithObject("Container"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 34, 2)}).
+					WithField("TestSuite", dag.TypeDef().WithObject("TestSuite"), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("main.go", 35, 2)})).
 			WithObject(
 				dag.TypeDef().WithObject("TestSuite", dagger.TypeDefWithObjectOpts{SourceMap: dag.SourceMap("test_collection.go", 16, 6)}).
 					WithField("Metadata", dag.TypeDef().WithKind(dagger.TypeDefKindStringKind), dagger.TypeDefWithFieldOpts{SourceMap: dag.SourceMap("test_collection.go", 17, 2)}).

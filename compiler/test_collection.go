@@ -27,7 +27,7 @@ type testPackage struct {
 }
 
 // DiscoverTests asks compiled libtest harnesses for their actual test names.
-// Discovery runs once for the workspace; package batches share its result.
+// Discovery uses the packages selected by the compiler plan.
 func (m *RustCompiler) DiscoverTests(ctx context.Context, source *dagger.Directory, plan *dagger.File, artifacts *dagger.Directory) (*TestSuite, error) {
 	contents, err := readCompilerPlan(ctx, plan)
 	if err != nil {
@@ -35,10 +35,6 @@ func (m *RustCompiler) DiscoverTests(ctx context.Context, source *dagger.Directo
 	}
 	var recipe model.Plan
 	if err := json.Unmarshal(contents, &recipe); err != nil {
-		return nil, err
-	}
-	targets, err := replay.CollectionTargets(&recipe)
-	if err != nil {
 		return nil, err
 	}
 	query := nativeQuery()
@@ -57,7 +53,15 @@ func (m *RustCompiler) DiscoverTests(ctx context.Context, source *dagger.Directo
 	if err != nil {
 		return nil, err
 	}
-	environment := replay.TestEnvironment(query, &recipe, native, target, core.Ref[*core.File](query, core.ID(runner)))
+	return m.discoverTests(ctx, query, &recipe, native, target, core.Ref[*core.File](query, core.ID(runner)))
+}
+
+func (m *RustCompiler) discoverTests(ctx context.Context, query *core.Query, recipe *model.Plan, source, target *core.Directory, runner *core.File) (*TestSuite, error) {
+	targets, err := replay.CollectionTargets(recipe)
+	if err != nil {
+		return nil, err
+	}
+	environment := replay.TestEnvironment(query, recipe, source, target, runner)
 	listing, err := json.Marshal(replay.CollectionListing(targets))
 	if err != nil {
 		return nil, err

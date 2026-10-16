@@ -47,6 +47,7 @@ type NativeCompilation {
   pub artifacts: Directory!
   published: Directory!
   tests: Container
+  suite: DiscoveredTests
   pub cache: NativeCache!
   pub hits: Int!
   pub actions: Int!
@@ -301,7 +302,7 @@ type Rust {
     action("check", source, ["cargo", "check"] + cargoFlags)
   }
 
-  let nativeCompilationResult(command: String!, source: Directory!, previous: NativeCache, noIncremental: Boolean! = false): NativeCompilation! {
+  let nativeCompilationResult(command: String!, source: Directory!, previous: NativeCache, noIncremental: Boolean! = false, collectTests: Boolean! = false): NativeCompilation! {
     assert("The experimental compiler backend requires a locked workspace and no extra packages") {
       locked and extraPackages.isEmpty
     }
@@ -330,7 +331,7 @@ type Rust {
     let selectedPlan = requestedPlan ?? previousFields.plan
     let result = rustCompiler.compile(source, plan: selectedPlan, automaticPlan: requestedPlan == null,
       previousManifest: previousFields.manifest, previousTokens: previousFields.tokens, previousSnapshots: previousFields.snapshots,
-      workers: 8, command: command, cargoFlags: cargoFlags, image: image, noIncremental: noIncremental)
+      workers: 8, command: command, cargoFlags: cargoFlags, image: image, noIncremental: noIncremental, collectTests: collectTests)
     let compiled = result.{{
         artifacts.{{id}}, published.{{id}},
         cache.{{id, plan.{{id}}, manifest, tokens, snapshots.{{id}}}},
@@ -342,9 +343,17 @@ type Rust {
     NativeCompilation(
       artifacts: node(compiled.artifacts.id!).{{... on Directory!}},
       published: node(compiled.published.id!).{{... on Directory!}},
-      tests: if (command == "test") {
+      tests: if (command == "test" and !collectTests) {
         let execution = result.tests!.{{id}}
         node(execution.id!).{{... on Container!}}
+      } else { null },
+      suite: if (collectTests) {
+        let suite = result.testSuite!.{{metadata, environment.{{id}}, executions.{{id}}}}
+        DiscoveredTests(
+          packages: JSON.decode(suite.metadata),
+          environment: node(suite.environment.id!).{{... on Container!}},
+          executions: suite.executions.map { execution => node(execution.id!).{{... on Container!}} },
+        )
       } else { null },
       cache: NativeCache(
         plan: node(compiled.cache.plan.id!).{{... on File!}},
@@ -402,15 +411,7 @@ type Rust {
 
   let nativeTestSuite(source: Directory!): DiscoveredTests! {
     assert("Individual test collections currently require nativeCache = true") { nativeCache }
-    let result = nativeCompilationResult("test", source, null)
-    let suite = rustCompiler.discoverTests(source, plan: result.cache.plan!, artifacts: result.artifacts).{{
-      metadata, environment.{{id}}, executions.{{id}}
-    }}
-    DiscoveredTests(
-      packages: JSON.decode(suite.metadata),
-      environment: node(suite.environment.id!).{{... on Container!}},
-      executions: suite.executions.map { execution => node(execution.id!).{{... on Container!}} },
-    )
+    nativeCompilationResult("test", source, null, collectTests: true).suite!
   }
 
   """Reconstruct a transferred cache with this engine's native directories."""

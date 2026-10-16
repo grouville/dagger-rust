@@ -32,6 +32,7 @@ type Compilation struct {
 	Actions   int
 	Published *dagger.Directory
 	Tests     *dagger.Container
+	TestSuite *TestSuite
 }
 
 // Capture records the compiler graph for a supported, locked Cargo workspace.
@@ -104,7 +105,13 @@ func (m *RustCompiler) Compile(ctx context.Context,
 	// Disable rustc incremental state for reproducible generated artifacts.
 	// +optional
 	noIncremental bool,
+	// Discover individual tests alongside compilation, instead of preparing a workspace test run.
+	// +optional
+	collectTests bool,
 ) (*Compilation, error) {
+	if collectTests && command != "test" {
+		return nil, fmt.Errorf("test discovery requires the test command")
+	}
 	if plan == nil && !automaticPlan {
 		return nil, fmt.Errorf("compiler plan is required")
 	}
@@ -254,22 +261,31 @@ func (m *RustCompiler) Compile(ctx context.Context,
 			dagger.Ref[*dagger.Directory](dag, dagger.ID(artifacts)).File(strings.TrimPrefix(publication.Output, model.TargetRoot+"/")))
 	}
 	var tests *dagger.Container
+	var suite *TestSuite
 	if command == "test" {
 		target := core.Ref[*core.Directory](query, artifacts)
 		for _, publication := range recipe.Publications {
 			target = target.WithFile(publication.Path, graph.Artifacts.File(strings.TrimPrefix(publication.Output, model.TargetRoot+"/")))
 		}
-		run, err := replay.TestExecution(query, &recipe, native, target, core.Ref[*core.File](query, core.ID(runner)))
-		if err != nil {
-			return nil, err
+		worker := core.Ref[*core.File](query, core.ID(runner))
+		if collectTests {
+			suite, err = m.discoverTests(ctx, query, &recipe, native, target, worker)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			run, err := replay.TestExecution(query, &recipe, native, target, worker)
+			if err != nil {
+				return nil, err
+			}
+			id, err := run.ID(ctx)
+			if err != nil {
+				return nil, err
+			}
+			tests = dagger.Ref[*dagger.Container](dag, dagger.ID(id))
 		}
-		id, err := run.ID(ctx)
-		if err != nil {
-			return nil, err
-		}
-		tests = dagger.Ref[*dagger.Container](dag, dagger.ID(id))
 	}
-	return &Compilation{Artifacts: dagger.Ref[*dagger.Directory](dag, dagger.ID(artifacts)), Published: published, Tests: tests, Cache: cache,
+	return &Compilation{Artifacts: dagger.Ref[*dagger.Directory](dag, dagger.ID(artifacts)), Published: published, Tests: tests, TestSuite: suite, Cache: cache,
 		Hits: graph.HistoryHits, Actions: len(recipe.Actions)}, nil
 }
 

@@ -122,7 +122,7 @@ and Clippy still use the existing Cargo backend.
 - Disk: one intermediate build directory per action per project.
 # Experimental test collections
 
-The `experiment/test-collection-granularity` branch exposes packages and their
+The `experiment/test-collection-preparation` branch exposes packages and their
 individual tests as two collection dimensions, matching the Go module's selection
 levels. It currently requires `nativeCache = true`.
 
@@ -154,4 +154,29 @@ check alongside the collection. Compiler outputs and incremental state remain
 native immutable Dagger snapshots. This branch is an experiment for comparing
 selection granularity and execution overhead; the existing selected module stays
 on its workspace batch implementation.
+
+This branch combines compilation and test discovery in one compiler-module call
+per package. It reuses the loaded compiler plan and native directories; listing
+and executing tests still use separate processes. At 64 packages, wcprof records
+193 process starts instead of 257. Compiler cache keys and worker binaries are
+unchanged.
+
+| Packages, eight tests each | Separate preparation | Combined preparation | Workspace batch | Cargo |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 0.90 s | 0.77 s | 0.88 s | 0.22 s |
+| 16 | 2.73 s | 2.49 s | 0.88 s | 0.24 s |
+| 64 | 10.20 s | 8.15 s | 0.87 s | 0.31 s |
+
+Four balanced pairs per size, with a fresh source edit and CLI process each time.
+The engine and compiler caches are warm; telemetry and normal GC stay enabled.
+All four pairs improve at one package, and three of four at each larger size.
+One 64-package pair is 47 ms slower. Allocated bytes fall from 8.06 to 6.90 GB
+at 64 packages; these are cumulative allocations, not peak memory.
+
+Replay and worker race checks pass. Integration checks cover partial test
+selection, selected test failures, excluding an invalid crate, repair, and the
+ordinary workspace API. Fine collections still cost much more than the workspace
+batch and remain experimental. The
+[measurement record](https://github.com/grouville/dagger/blob/experiment/rust-native-cache/hack/rust-cache/NATIVE_TEST_COLLECTIONS.md)
+includes all samples and separate profiles.
 
