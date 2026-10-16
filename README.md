@@ -122,7 +122,7 @@ and Clippy still use the existing Cargo backend.
 - Disk: one intermediate build directory per action per project.
 # Experimental test collections
 
-The `experiment/test-collection-preparation` branch exposes packages and their
+The `experiment/test-collection-batched-inputs` branch exposes packages and their
 individual tests as two collection dimensions, matching the Go module's selection
 levels. It currently requires `nativeCache = true`.
 
@@ -179,4 +179,18 @@ ordinary workspace API. Fine collections still cost much more than the workspace
 batch and remain experimental. The
 [measurement record](https://github.com/grouville/dagger/blob/experiment/rust-native-cache/hack/rust-cache/NATIVE_TEST_COLLECTIONS.md)
 includes all samples and separate profiles.
+
+This experiment also applies the generated dispatcher from the
+[Go codegen change](https://github.com/grouville/dagger/commit/af040470362736cf72f56d7a9f5365564fa2a751).
+The compiler helper reads its function metadata and argument values in one
+request, instead of 28 requests for its 12 supplied arguments. No worker or
+compiler-cache code changes. Regenerating with an unpatched code generator will
+replace this experimental dispatcher.
+
+At 64 packages, complete edited collections measure 8.60 → 8.25 seconds in four
+pairs and 8.92 → 8.10 seconds in a separate eight-pair confirmation. Ten of the
+twelve pairs improve. Wcprof records 5,097 → 3,369 engine queries with the same
+193 workload starts. The ordinary workspace API stays flat at 0.92 → 0.93 seconds
+over six pairs. These gains are separate from the earlier preparation comparison.
+Fine collections remain experimental; the workspace batch is still much faster.
 
